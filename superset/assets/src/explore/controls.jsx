@@ -1849,7 +1849,7 @@ export const controls = {
     'Either a numerical column or `Auto`, which scales the point based ' +
     'on the largest cluster'),
     mapStateToProps: state => ({
-      choices: columnChoices(state.datasource),
+      choices: formatSelectOptions(['Auto']).concat(columnChoices(state.datasource)),
     }),
   },
 
@@ -2095,6 +2095,7 @@ export const controls = {
     type: 'ColorMapControl',
     label: t('Color Map'),
     default: {},
+    renderTrigger: true,
     mapStateToProps: state => ({
       colorNamespace: state.form_data.color_namespace,
       colorScheme: state.form_data.color_scheme,

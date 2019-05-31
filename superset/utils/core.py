@@ -32,7 +32,8 @@ import signal
 import smtplib
 import sys
 from time import struct_time
-from typing import List, Optional, Tuple
+from typing import List, NamedTuple, Optional, Tuple
+from urllib.parse import unquote_plus
 import uuid
 import zlib
 
@@ -141,8 +142,18 @@ def memoized(func=None, watch=None):
         return wrapper
 
 
-def js_string_to_python(item: str) -> Optional[str]:
-    return None if item in ('null', 'undefined') else item
+def parse_js_uri_path_item(item: Optional[str], unquote: bool = True,
+                           eval_undefined: bool = False) -> Optional[str]:
+    """Parse a uri path item made with js.
+
+    :param item: a uri path component
+    :param unquote: Perform unquoting of string using urllib.parse.unquote_plus()
+    :param eval_undefined: When set to True and item is either 'null'  or 'undefined',
+    assume item is undefined and return None.
+    :return: Either None, the original item or unquoted item
+    """
+    item = None if eval_undefined and item in ('null', 'undefined') else item
+    return unquote_plus(item) if unquote and item else item
 
 
 def string_to_num(s: str):
@@ -852,11 +863,6 @@ def merge_request_params(form_data: dict, params: dict):
     form_data['url_params'] = url_params
 
 
-def get_update_perms_flag() -> bool:
-    val = os.environ.get('SUPERSET_UPDATE_PERMS')
-    return val.lower() not in ('0', 'false', 'no') if val else True
-
-
 def user_label(user: User) -> Optional[str]:
     """Given a user ORM FAB object, returns a label"""
     if user:
@@ -1094,3 +1100,8 @@ def MediumText() -> Variant:
 
 def shortid() -> str:
     return '{}'.format(uuid.uuid4())[-12:]
+
+
+class DatasourceName(NamedTuple):
+    table: str
+    schema: str

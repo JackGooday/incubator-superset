@@ -36,15 +36,22 @@ import os
 import re
 import textwrap
 import time
+from typing import Dict, List, Optional, Tuple
+from urllib import parse
 
 from flask import g
 from flask_babel import lazy_gettext as _
 import pandas
 import sqlalchemy as sqla
-from sqlalchemy import Column, select
+from sqlalchemy import Column, DateTime, select, types
 from sqlalchemy.engine import create_engine
+from sqlalchemy.engine.base import Engine
+from sqlalchemy.engine.reflection import Inspector
+from sqlalchemy.engine.result import RowProxy
 from sqlalchemy.engine.url import make_url
+from sqlalchemy.ext.compiler import compiles
 from sqlalchemy.sql import quoted_name, text
+from sqlalchemy.sql.expression import ColumnClause
 from sqlalchemy.sql.expression import TextAsFrom
 from sqlalchemy.types import String, UnicodeText
 import sqlparse
@@ -52,6 +59,7 @@ from werkzeug.utils import secure_filename
 
 from superset import app, conf, db, sql_parse
 from superset.exceptions import SupersetTemplateException
+from superset.models.sql_types.presto_sql_types import type_map as presto_type_map
 from superset.utils import core as utils
 
 QueryStatus = utils.QueryStatus
@@ -83,6 +91,24 @@ builtin_time_grains = {
 }
 
 
+class TimestampExpression(ColumnClause):
+    def __init__(self, expr: str, col: ColumnClause, **kwargs):
+        """Sqlalchemy class that can be can be used to render native column elements
+        respeting engine-specific quoting rules as part of a string-based expression.
+
+        :param expr: Sql expression with '{col}' denoting the locations where the col
+        object will be rendered.
+        :param col: the target column
+        """
+        super().__init__(expr, **kwargs)
+        self.col = col
+
+
+@compiles(TimestampExpression)
+def compile_timegrain_expression(element: TimestampExpression, compiler, **kw):
+    return element.name.replace('{col}', compiler.process(element.col, **kw))
+
+
 def _create_time_grains_tuple(time_grains, time_grain_functions, blacklist):
     ret_list = []
     blacklist = blacklist if blacklist else []
@@ -105,7 +131,7 @@ class BaseEngineSpec(object):
     """Abstract class for database engine specific configurations"""
 
     engine = 'base'  # str as defined in sqlalchemy.engine.engine
-    time_grain_functions = {}
+    time_grain_functions: Dict[Optional[str], str] = {}
     time_groupby_inline = False
     limit_method = LimitMethod.FORCE_LIMIT
     time_secondary_columns = False
@@ -113,20 +139,36 @@ class BaseEngineSpec(object):
     allows_subquery = True
     supports_column_aliases = True
     force_column_alias_quotes = False
-    arraysize = None
-    max_column_name_length = None
+    arraysize = 0
+    max_column_name_length = 0
+    try_remove_schema_from_table_name = True
 
     @classmethod
-    def get_time_expr(cls, expr, pdf, time_grain, grain):
+    def get_timestamp_expr(cls, col: ColumnClause, pdf: Optional[str],
+                           time_grain: Optional[str]) -> TimestampExpression:
+        """
+        Construct a TimeExpression to be used in a SQLAlchemy query.
+
+        :param col: Target column for the TimeExpression
+        :param pdf: date format (seconds or milliseconds)
+        :param time_grain: time grain, e.g. P1Y for 1 year
+        :return: TimestampExpression object
+        """
+        if time_grain:
+            time_expr = cls.time_grain_functions.get(time_grain)
+            if not time_expr:
+                raise NotImplementedError(
+                    f'No grain spec for {time_grain} for database {cls.engine}')
+        else:
+            time_expr = '{col}'
+
         # if epoch, translate to DATE using db specific conf
         if pdf == 'epoch_s':
-            expr = cls.epoch_to_dttm().format(col=expr)
+            time_expr = time_expr.replace('{col}', cls.epoch_to_dttm())
         elif pdf == 'epoch_ms':
-            expr = cls.epoch_ms_to_dttm().format(col=expr)
+            time_expr = time_expr.replace('{col}', cls.epoch_ms_to_dttm())
 
-        if grain:
-            expr = grain.function.format(col=expr)
-        return expr
+        return TimestampExpression(time_expr, col, type_=DateTime)
 
     @classmethod
     def get_time_grains(cls):
@@ -272,33 +314,32 @@ class BaseEngineSpec(object):
         return "'{}'".format(dttm.strftime('%Y-%m-%d %H:%M:%S'))
 
     @classmethod
-    def fetch_result_sets(cls, db, datasource_type):
-        """Returns a list of tables [schema1.table1, schema2.table2, ...]
+    def get_all_datasource_names(cls, db, datasource_type: str) \
+            -> List[utils.DatasourceName]:
+        """Returns a list of all tables or views in database.
 
-        Datasource_type can be 'table' or 'view'.
-        Empty schema corresponds to the list of full names of the all
-        tables or views: <schema>.<result_set_name>.
+        :param db: Database instance
+        :param datasource_type: Datasource_type can be 'table' or 'view'
+        :return: List of all datasources in database or schema
         """
-        schemas = db.all_schema_names(cache=db.schema_cache_enabled,
-                                      cache_timeout=db.schema_cache_timeout,
-                                      force=True)
-        all_result_sets = []
+        schemas = db.get_all_schema_names(cache=db.schema_cache_enabled,
+                                          cache_timeout=db.schema_cache_timeout,
+                                          force=True)
+        all_datasources: List[utils.DatasourceName] = []
         for schema in schemas:
             if datasource_type == 'table':
-                all_datasource_names = db.all_table_names_in_schema(
+                all_datasources += db.get_all_table_names_in_schema(
                     schema=schema, force=True,
                     cache=db.table_cache_enabled,
                     cache_timeout=db.table_cache_timeout)
             elif datasource_type == 'view':
-                all_datasource_names = db.all_view_names_in_schema(
+                all_datasources += db.get_all_view_names_in_schema(
                     schema=schema, force=True,
                     cache=db.table_cache_enabled,
                     cache_timeout=db.table_cache_timeout)
             else:
                 raise Exception(f'Unsupported datasource_type: {datasource_type}')
-            all_result_sets += [
-                '{}.{}'.format(schema, t) for t in all_datasource_names]
-        return all_result_sets
+        return all_datasources
 
     @classmethod
     def handle_cursor(cls, cursor, query, session):
@@ -345,11 +386,21 @@ class BaseEngineSpec(object):
 
     @classmethod
     def get_table_names(cls, inspector, schema):
-        return sorted(inspector.get_table_names(schema))
+        tables = inspector.get_table_names(schema)
+        if schema and cls.try_remove_schema_from_table_name:
+            tables = [re.sub(f'^{schema}\\.', '', table) for table in tables]
+        return sorted(tables)
 
     @classmethod
     def get_view_names(cls, inspector, schema):
-        return sorted(inspector.get_view_names(schema))
+        views = inspector.get_view_names(schema)
+        if schema and cls.try_remove_schema_from_table_name:
+            views = [re.sub(f'^{schema}\\.', '', view) for view in views]
+        return sorted(views)
+
+    @classmethod
+    def get_columns(cls, inspector: Inspector, table_name: str, schema: str) -> list:
+        return inspector.get_columns(table_name, schema)
 
     @classmethod
     def where_latest_partition(
@@ -472,13 +523,6 @@ class BaseEngineSpec(object):
             label = label[:cls.max_column_name_length]
         return label
 
-    @staticmethod
-    def get_timestamp_column(expression, column_name):
-        """Return the expression if defined, otherwise return column_name. Some
-        engines require forcing quotes around column name, in which case this method
-        can be overridden."""
-        return expression or column_name
-
 
 class PostgresBaseEngineSpec(BaseEngineSpec):
     """ Abstract class for Postgres 'like' databases """
@@ -517,6 +561,7 @@ class PostgresBaseEngineSpec(BaseEngineSpec):
 class PostgresEngineSpec(PostgresBaseEngineSpec):
     engine = 'postgresql'
     max_column_name_length = 63
+    try_remove_schema_from_table_name = False
 
     @classmethod
     def get_table_names(cls, inspector, schema):
@@ -524,16 +569,6 @@ class PostgresEngineSpec(PostgresBaseEngineSpec):
         tables = inspector.get_table_names(schema)
         tables.extend(inspector.get_foreign_table_names(schema))
         return sorted(tables)
-
-    @staticmethod
-    def get_timestamp_column(expression, column_name):
-        """Postgres is unable to identify mixed case column names unless they
-        are quoted."""
-        if expression:
-            return expression
-        elif column_name.lower() != column_name:
-            return f'"{column_name}"'
-        return column_name
 
 
 class SnowflakeEngineSpec(PostgresBaseEngineSpec):
@@ -567,6 +602,7 @@ class SnowflakeEngineSpec(PostgresBaseEngineSpec):
         if '/' in uri.database:
             database = uri.database.split('/')[0]
         if selected_schema:
+            selected_schema = parse.quote(selected_schema, safe='')
             uri.database = database + '/' + selected_schema
         return uri
 
@@ -673,28 +709,24 @@ class SqliteEngineSpec(BaseEngineSpec):
         return "datetime({col}, 'unixepoch')"
 
     @classmethod
-    def fetch_result_sets(cls, db, datasource_type):
-        schemas = db.all_schema_names(cache=db.schema_cache_enabled,
-                                      cache_timeout=db.schema_cache_timeout,
-                                      force=True)
-        all_result_sets = []
+    def get_all_datasource_names(cls, db, datasource_type: str) \
+            -> List[utils.DatasourceName]:
+        schemas = db.get_all_schema_names(cache=db.schema_cache_enabled,
+                                          cache_timeout=db.schema_cache_timeout,
+                                          force=True)
         schema = schemas[0]
         if datasource_type == 'table':
-            all_datasource_names = db.all_table_names_in_schema(
+            return db.get_all_table_names_in_schema(
                 schema=schema, force=True,
                 cache=db.table_cache_enabled,
                 cache_timeout=db.table_cache_timeout)
         elif datasource_type == 'view':
-            all_datasource_names = db.all_view_names_in_schema(
+            return db.get_all_view_names_in_schema(
                 schema=schema, force=True,
                 cache=db.table_cache_enabled,
                 cache_timeout=db.table_cache_timeout)
         else:
             raise Exception(f'Unsupported datasource_type: {datasource_type}')
-
-        all_result_sets += [
-            '{}.{}'.format(schema, t) for t in all_datasource_names]
-        return all_result_sets
 
     @classmethod
     def convert_dttm(cls, target_type, dttm):
@@ -707,6 +739,50 @@ class SqliteEngineSpec(BaseEngineSpec):
     def get_table_names(cls, inspector, schema):
         """Need to disregard the schema for Sqlite"""
         return sorted(inspector.get_table_names())
+
+
+class DrillEngineSpec(BaseEngineSpec):
+    """Engine spec for Apache Drill"""
+    engine = 'drill'
+
+    time_grain_functions = {
+        None: '{col}',
+        'PT1S': "nearestDate({col}, 'SECOND')",
+        'PT1M': "nearestDate({col}, 'MINUTE')",
+        'PT15M': "nearestDate({col}, 'QUARTER_HOUR')",
+        'PT0.5H': "nearestDate({col}, 'HALF_HOUR')",
+        'PT1H': "nearestDate({col}, 'HOUR')",
+        'P1D': 'TO_DATE({col})',
+        'P1W': "nearestDate({col}, 'WEEK_SUNDAY')",
+        'P1M': "nearestDate({col}, 'MONTH')",
+        'P0.25Y': "nearestDate({col}, 'QUARTER')",
+        'P1Y': "nearestDate({col}, 'YEAR')",
+    }
+
+    # Returns a function to convert a Unix timestamp in milliseconds to a date
+    @classmethod
+    def epoch_to_dttm(cls):
+        return cls.epoch_ms_to_dttm().replace('{col}', '({col}*1000)')
+
+    @classmethod
+    def epoch_ms_to_dttm(cls):
+        return 'TO_DATE({col})'
+
+    @classmethod
+    def convert_dttm(cls, target_type, dttm):
+        tt = target_type.upper()
+        if tt == 'DATE':
+            return "CAST('{}' AS DATE)".format(dttm.isoformat()[:10])
+        elif tt == 'TIMESTAMP':
+            return "CAST('{}' AS TIMESTAMP)".format(
+                dttm.strftime('%Y-%m-%d %H:%M:%S'))
+        return "'{}'".format(dttm.strftime('%Y-%m-%d %H:%M:%S'))
+
+    @classmethod
+    def adjust_database_uri(cls, uri, selected_schema):
+        if selected_schema:
+            uri.database = parse.quote(selected_schema, safe='')
+        return uri
 
 
 class MySQLEngineSpec(BaseEngineSpec):
@@ -735,7 +811,7 @@ class MySQLEngineSpec(BaseEngineSpec):
               'INTERVAL DAYOFWEEK(DATE_SUB({col}, INTERVAL 1 DAY)) - 1 DAY))',
     }
 
-    type_code_map = {}  # loaded from get_datatype only if needed
+    type_code_map: Dict[int, str] = {}  # loaded from get_datatype only if needed
 
     @classmethod
     def convert_dttm(cls, target_type, dttm):
@@ -747,7 +823,7 @@ class MySQLEngineSpec(BaseEngineSpec):
     @classmethod
     def adjust_database_uri(cls, uri, selected_schema=None):
         if selected_schema:
-            uri.database = selected_schema
+            uri.database = parse.quote(selected_schema, safe='')
         return uri
 
     @classmethod
@@ -815,9 +891,263 @@ class PrestoEngineSpec(BaseEngineSpec):
         return []
 
     @classmethod
+    def _create_column_info(cls, column: RowProxy, name: str, data_type: str) -> dict:
+        """
+        Create column info object
+        :param column: column object
+        :param name: column name
+        :param data_type: column data type
+        :return: column info object
+        """
+        return {
+            'name': name,
+            'type': data_type,
+            # newer Presto no longer includes this column
+            'nullable': getattr(column, 'Null', True),
+            'default': None,
+        }
+
+    @classmethod
+    def _get_full_name(cls, names: List[Tuple[str, str]]) -> str:
+        """
+        Get the full column name
+        :param names: list of all individual column names
+        :return: full column name
+        """
+        return '.'.join(column[0] for column in names if column[0])
+
+    @classmethod
+    def _has_nested_data_types(cls, component_type: str) -> bool:
+        """
+        Check if string contains a data type. We determine if there is a data type by
+        whitespace or multiple data types by commas
+        :param component_type: data type
+        :return: boolean
+        """
+        comma_regex = r',(?=(?:[^\"]*\"[^\"]*\")*[^\"]*$)'
+        white_space_regex = r'\s(?=(?:[^\"]*\"[^\"]*\")*[^\"]*$)'
+        return re.search(comma_regex, component_type) is not None \
+            or re.search(white_space_regex, component_type) is not None
+
+    @classmethod
+    def _split_data_type(cls, data_type: str, delimiter: str) -> List[str]:
+        """
+        Split data type based on given delimiter. Do not split the string if the
+        delimiter is enclosed in quotes
+        :param data_type: data type
+        :param delimiter: string separator (i.e. open parenthesis, closed parenthesis,
+               comma, whitespace)
+        :return: list of strings after breaking it by the delimiter
+        """
+        return re.split(
+            r'{}(?=(?:[^\"]*\"[^\"]*\")*[^\"]*$)'.format(delimiter), data_type)
+
+    @classmethod
+    def _parse_structural_column(cls, column: RowProxy, result: List[dict]) -> None:
+        """
+        Parse a row or array column
+        :param column: column
+        :param result: list tracking the results
+        """
+        full_data_type = '{} {}'.format(column.Column, column.Type)
+        # split on open parenthesis ( to get the structural
+        # data type and its component types
+        data_types = cls._split_data_type(full_data_type, r'\(')
+        stack: List[Tuple[str, str]] = []
+        for data_type in data_types:
+            # split on closed parenthesis ) to track which component
+            # types belong to what structural data type
+            inner_types = cls._split_data_type(data_type, r'\)')
+            for inner_type in inner_types:
+                # We have finished parsing multiple structural data types
+                if not inner_type and len(stack) > 0:
+                    stack.pop()
+                elif cls._has_nested_data_types(inner_type):
+                    # split on comma , to get individual data types
+                    single_fields = cls._split_data_type(inner_type, ', ')
+                    for single_field in single_fields:
+                        # If component type starts with a comma, the first single field
+                        # will be an empty string. Disregard this empty string.
+                        if not single_field:
+                            continue
+                        # split on whitespace to get field name and data type
+                        field_info = cls._split_data_type(single_field, r'\s')
+                        # check if there is a structural data type within
+                        # overall structural data type
+                        if field_info[1] == 'array' or field_info[1] == 'row':
+                            stack.append((field_info[0], field_info[1]))
+                            full_parent_path = cls._get_full_name(stack)
+                            result.append(cls._create_column_info(
+                                column, full_parent_path,
+                                presto_type_map[field_info[1]]()))
+                        else:  # otherwise this field is a basic data type
+                            full_parent_path = cls._get_full_name(stack)
+                            column_name = '{}.{}'.format(full_parent_path, field_info[0])
+                            result.append(cls._create_column_info(
+                                column, column_name, presto_type_map[field_info[1]]()))
+                    # If the component type ends with a structural data type, do not pop
+                    # the stack. We have run across a structural data type within the
+                    # overall structural data type. Otherwise, we have completely parsed
+                    # through the entire structural data type and can move on.
+                    if not (inner_type.endswith('array') or inner_type.endswith('row')):
+                        stack.pop()
+                # We have an array of row objects (i.e. array(row(...)))
+                elif 'array' == inner_type or 'row' == inner_type:
+                    # Push a dummy object to represent the structural data type
+                    stack.append(('', inner_type))
+                # We have an array of a basic data types(i.e. array(varchar)).
+                elif len(stack) > 0:
+                    # Because it is an array of a basic data type. We have finished
+                    # parsing the structural data type and can move on.
+                    stack.pop()
+
+    @classmethod
+    def _show_columns(
+            cls, inspector: Inspector, table_name: str, schema: str) -> List[RowProxy]:
+        """
+        Show presto column names
+        :param inspector: object that performs database schema inspection
+        :param table_name: table name
+        :param schema: schema name
+        :return: list of column objects
+        """
+        quote = inspector.engine.dialect.identifier_preparer.quote_identifier
+        full_table = quote(table_name)
+        if schema:
+            full_table = '{}.{}'.format(quote(schema), full_table)
+        columns = inspector.bind.execute('SHOW COLUMNS FROM {}'.format(full_table))
+        return columns
+
+    @classmethod
+    def get_columns(
+            cls, inspector: Inspector, table_name: str, schema: str) -> List[dict]:
+        """
+        Get columns from a Presto data source. This includes handling row and
+        array data types
+        :param inspector: object that performs database schema inspection
+        :param table_name: table name
+        :param schema: schema name
+        :return: a list of results that contain column info
+                (i.e. column name and data type)
+        """
+        columns = cls._show_columns(inspector, table_name, schema)
+        result: List[dict] = []
+        for column in columns:
+            try:
+                # parse column if it is a row or array
+                if 'array' in column.Type or 'row' in column.Type:
+                    cls._parse_structural_column(column, result)
+                    continue
+                else:  # otherwise column is a basic data type
+                    column_type = presto_type_map[column.Type]()
+            except KeyError:
+                logging.info('Did not recognize type {} of column {}'.format(
+                    column.Type, column.Column))
+                column_type = types.NullType
+            result.append(cls._create_column_info(column, column.Column, column_type))
+        return result
+
+    @classmethod
+    def _is_column_name_quoted(cls, column_name: str) -> bool:
+        """
+        Check if column name is in quotes
+        :param column_name: column name
+        :return: boolean
+        """
+        return column_name.startswith('"') and column_name.endswith('"')
+
+    @classmethod
+    def _get_fields(cls, cols: List[dict]) -> List[ColumnClause]:
+        """
+        Format column clauses where names are in quotes and labels are specified
+        :param cols: columns
+        :return: column clauses
+        """
+        column_clauses = []
+        # Column names are separated by periods. This regex will find periods in a string
+        # if they are not enclosed in quotes because if a period is enclosed in quotes,
+        # then that period is part of a column name.
+        dot_pattern = r"""\.                # split on period
+                          (?=               # look ahead
+                          (?:               # create non-capture group
+                          [^\"]*\"[^\"]*\"  # two quotes
+                          )*[^\"]*$)        # end regex"""
+        dot_regex = re.compile(dot_pattern, re.VERBOSE)
+        for col in cols:
+            # get individual column names
+            col_names = re.split(dot_regex, col['name'])
+            # quote each column name if it is not already quoted
+            for index, col_name in enumerate(col_names):
+                if not cls._is_column_name_quoted(col_name):
+                    col_names[index] = '"{}"'.format(col_name)
+            quoted_col_name = '.'.join(
+                col_name if cls._is_column_name_quoted(col_name) else f'"{col_name}"'
+                for col_name in col_names)
+            # create column clause in the format "name"."name" AS "name.name"
+            column_clause = sqla.literal_column(quoted_col_name).label(col['name'])
+            column_clauses.append(column_clause)
+        return column_clauses
+
+    @classmethod
+    def _filter_presto_cols(cls, cols: List[dict]) -> List[dict]:
+        """
+        We want to filter out columns that correspond to array content because expanding
+        arrays would require us to use unnest and join. This can lead to a large,
+        complicated, and slow query.
+
+        Example: select array_content
+                 from TABLE
+                 cross join UNNEST(array_column) as t(array_content);
+
+        We know which columns to skip because cols is a list provided to us in a specific
+        order where a structural column is positioned right before its content.
+
+        Example: Column Name: ColA, Column Data Type: array(row(nest_obj int))
+                 cols = [ ..., ColA, ColA.nest_obj, ... ]
+
+        When we run across an array, check if subsequent column names start with the
+        array name and skip them.
+        :param cols: columns
+        :return: filtered list of columns
+        """
+        filtered_cols = []
+        curr_array_col_name = ''
+        for col in cols:
+            # col corresponds to an array's content and should be skipped
+            if curr_array_col_name and col['name'].startswith(curr_array_col_name):
+                continue
+            # col is an array so we need to check if subsequent
+            # columns correspond to the array's contents
+            elif str(col['type']) == 'ARRAY':
+                curr_array_col_name = col['name']
+                filtered_cols.append(col)
+            else:
+                curr_array_col_name = ''
+                filtered_cols.append(col)
+        return filtered_cols
+
+    @classmethod
+    def select_star(cls, my_db, table_name: str, engine: Engine, schema: str = None,
+                    limit: int = 100, show_cols: bool = False, indent: bool = True,
+                    latest_partition: bool = True, cols: List[dict] = []) -> str:
+        """
+        Include selecting properties of row objects. We cannot easily break arrays into
+        rows, so render the whole array in its own row and skip columns that correspond
+        to an array's contents.
+        """
+        presto_cols = cols
+        if show_cols:
+            presto_cols = cls._filter_presto_cols(cols)
+        return super(PrestoEngineSpec, cls).select_star(
+            my_db, table_name, engine, schema, limit,
+            show_cols, indent, latest_partition, presto_cols,
+        )
+
+    @classmethod
     def adjust_database_uri(cls, uri, selected_schema=None):
         database = uri.database
         if selected_schema and database:
+            selected_schema = parse.quote(selected_schema, safe='')
             if '/' in database:
                 database = database.split('/')[0] + '/' + selected_schema
             else:
@@ -841,24 +1171,19 @@ class PrestoEngineSpec(BaseEngineSpec):
         return 'from_unixtime({col})'
 
     @classmethod
-    def fetch_result_sets(cls, db, datasource_type):
-        """Returns a list of tables [schema1.table1, schema2.table2, ...]
-
-        Datasource_type can be 'table' or 'view'.
-        Empty schema corresponds to the list of full names of the all
-        tables or views: <schema>.<result_set_name>.
-        """
-        result_set_df = db.get_df(
+    def get_all_datasource_names(cls, db, datasource_type: str) \
+            -> List[utils.DatasourceName]:
+        datasource_df = db.get_df(
             """SELECT table_schema, table_name FROM INFORMATION_SCHEMA.{}S
                ORDER BY concat(table_schema, '.', table_name)""".format(
                 datasource_type.upper(),
             ),
             None)
-        result_sets = []
-        for unused, row in result_set_df.iterrows():
-            result_sets.append('{}.{}'.format(
-                row['table_schema'], row['table_name']))
-        return result_sets
+        datasource_names: List[utils.DatasourceName] = []
+        for unused, row in datasource_df.iterrows():
+            datasource_names.append(utils.DatasourceName(
+                schema=row['table_schema'], table=row['table_name']))
+        return datasource_names
 
     @classmethod
     def extra_table_metadata(cls, database, table_name, schema_name):
@@ -1119,9 +1444,9 @@ class HiveEngineSpec(PrestoEngineSpec):
         hive.Cursor.fetch_logs = patched_hive.fetch_logs
 
     @classmethod
-    def fetch_result_sets(cls, db, datasource_type):
-        return BaseEngineSpec.fetch_result_sets(
-            db, datasource_type)
+    def get_all_datasource_names(cls, db, datasource_type: str) \
+            -> List[utils.DatasourceName]:
+        return BaseEngineSpec.get_all_datasource_names(db, datasource_type)
 
     @classmethod
     def fetch_data(cls, cursor, limit):
@@ -1221,7 +1546,7 @@ class HiveEngineSpec(PrestoEngineSpec):
     @classmethod
     def adjust_database_uri(cls, uri, selected_schema=None):
         if selected_schema:
-            uri.database = selected_schema
+            uri.database = parse.quote(selected_schema, safe='')
         return uri
 
     @classmethod
@@ -1324,6 +1649,11 @@ class HiveEngineSpec(PrestoEngineSpec):
             polled = cursor.poll()
 
     @classmethod
+    def get_columns(
+            cls, inspector: Inspector, table_name: str, schema: str) -> List[dict]:
+        return inspector.get_columns(table_name, schema)
+
+    @classmethod
     def where_latest_partition(
             cls, table_name, schema, database, qry, columns=None):
         try:
@@ -1337,6 +1667,10 @@ class HiveEngineSpec(PrestoEngineSpec):
                 if c.get('name') == col_name:
                     return qry.where(Column(col_name) == value)
         return False
+
+    @classmethod
+    def _get_fields(cls, cols: List[dict]) -> List[ColumnClause]:
+        return BaseEngineSpec._get_fields(cols)
 
     @classmethod
     def latest_sub_partition(cls, table_name, schema, database, **kwargs):
@@ -1353,6 +1687,14 @@ class HiveEngineSpec(PrestoEngineSpec):
     def _partition_query(
             cls, table_name, limit=0, order_by=None, filters=None):
         return f'SHOW PARTITIONS {table_name}'
+
+    @classmethod
+    def select_star(cls, my_db, table_name: str, engine: Engine, schema: str = None,
+                    limit: int = 100, show_cols: bool = False, indent: bool = True,
+                    latest_partition: bool = True, cols: List[dict] = []) -> str:
+        return BaseEngineSpec.select_star(
+            my_db, table_name, engine, schema, limit,
+            show_cols, indent, latest_partition, cols)
 
     @classmethod
     def modify_url_for_impersonation(cls, url, impersonate_user, username):
@@ -1487,20 +1829,21 @@ class PinotEngineSpec(BaseEngineSpec):
     inner_joins = False
     supports_column_aliases = False
 
-    _time_grain_to_datetimeconvert = {
+    # Pinot does its own conversion below
+    time_grain_functions: Dict[Optional[str], str] = {
         'PT1S': '1:SECONDS',
         'PT1M': '1:MINUTES',
         'PT1H': '1:HOURS',
         'P1D': '1:DAYS',
-        'P1Y': '1:YEARS',
+        'P1W': '1:WEEKS',
         'P1M': '1:MONTHS',
+        'P0.25Y': '3:MONTHS',
+        'P1Y': '1:YEARS',
     }
 
-    # Pinot does its own conversion below
-    time_grain_functions = {k: None for k in _time_grain_to_datetimeconvert.keys()}
-
     @classmethod
-    def get_time_expr(cls, expr, pdf, time_grain, grain):
+    def get_timestamp_expr(cls, col: ColumnClause, pdf: Optional[str],
+                           time_grain: Optional[str]) -> TimestampExpression:
         is_epoch = pdf in ('epoch_s', 'epoch_ms')
         if not is_epoch:
             raise NotImplementedError('Pinot currently only supports epochs')
@@ -1509,11 +1852,12 @@ class PinotEngineSpec(BaseEngineSpec):
         # We are not really converting any time units, just bucketing them.
         seconds_or_ms = 'MILLISECONDS' if pdf == 'epoch_ms' else 'SECONDS'
         tf = f'1:{seconds_or_ms}:EPOCH'
-        granularity = cls._time_grain_to_datetimeconvert.get(time_grain)
+        granularity = cls.time_grain_functions.get(time_grain)
         if not granularity:
             raise NotImplementedError('No pinot grain spec for ' + str(time_grain))
         # In pinot the output is a string since there is no timestamp column like pg
-        return f'DATETIMECONVERT({expr}, "{tf}", "{tf}", "{granularity}")'
+        time_expr = f'DATETIMECONVERT({{col}}, "{tf}", "{tf}", "{granularity}")'
+        return TimestampExpression(time_expr, col)
 
     @classmethod
     def make_select_compatible(cls, groupby_exprs, select_exprs):
