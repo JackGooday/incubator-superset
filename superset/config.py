@@ -351,7 +351,13 @@ MAPBOX_API_KEY = os.environ.get('MAPBOX_API_KEY', '')
 # in the results backend. This also becomes the limit when exporting CSVs
 SQL_MAX_ROW = 100000
 
-# Default row limit for SQL Lab queries
+# Maximum number of rows displayed in SQL Lab UI
+# Is set to avoid out of memory/localstorage issues in browsers. Does not affect
+# exported CSVs
+DISPLAY_MAX_ROW = 10000
+
+# Default row limit for SQL Lab queries. Is overridden by setting a new limit in
+# the SQL Lab UI
 DEFAULT_SQLLAB_LIMIT = 1000
 
 # Maximum number of tables/views displayed in the dropdown window in SQL Lab.
@@ -599,14 +605,14 @@ BUG_REPORT_URL = None
 DOCUMENTATION_URL = None
 
 # What is the Last N days relative in the time selector to:
-# 'today' means it is midnight (00:00:00) of today in the local timezone
+# 'today' means it is midnight (00:00:00) in the local timezone
 # 'now' means it is relative to the query issue time
+# If both start and end time is set to now, this will make the time
+# filter a moving window. By only setting the end time to now,
+# start time will be set to midnight, while end will be relative to
+# the query issue time.
+DEFAULT_RELATIVE_START_TIME = 'today'
 DEFAULT_RELATIVE_END_TIME = 'today'
-
-# Is epoch_s/epoch_ms datetime format supposed to be considered since UTC ?
-# If not, it is sassumed then the epoch_s/epoch_ms is seconds since 1/1/1970
-# localtime (in the tz where the superset webserver is running)
-IS_EPOCH_S_TRULY_UTC = False
 
 # Configure which SQL validator to use for each engine
 SQL_VALIDATORS_BY_ENGINE = {
