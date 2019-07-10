@@ -44,8 +44,7 @@ from flask_babel import gettext as __
 from flask_babel import lazy_gettext as _
 import pandas as pd
 import simplejson as json
-from sqlalchemy import and_, create_engine, MetaData, or_, select
-from sqlalchemy.engine.url import make_url
+from sqlalchemy import and_, MetaData, or_, select
 from sqlalchemy.exc import IntegrityError
 from werkzeug.routing import BaseConverter
 from werkzeug.utils import secure_filename
@@ -56,6 +55,7 @@ from superset import (
     cache,
     conf,
     db,
+    event_logger,
     get_feature_flags,
     results_backend,
     security_manager,
@@ -64,7 +64,11 @@ from superset import (
 )
 from superset.connectors.connector_registry import ConnectorRegistry
 from superset.connectors.sqla.models import AnnotationDatasource, SqlaTable
-from superset.exceptions import SupersetException, SupersetSecurityException
+from superset.exceptions import (
+    DatabaseNotFound,
+    SupersetException,
+    SupersetSecurityException,
+)
 from superset.forms import CsvToDatabaseForm
 from superset.jinja_context import get_template_processor
 from superset.legacy import update_time_range
@@ -104,7 +108,6 @@ from .utils import (
 config = app.config
 CACHE_DEFAULT_TIMEOUT = config.get("CACHE_DEFAULT_TIMEOUT", 0)
 stats_logger = config.get("STATS_LOGGER")
-log_this = models.Log.log_this
 DAR = models.DatasourceAccessRequest
 QueryStatus = utils.QueryStatus
 
@@ -834,7 +837,7 @@ class DashboardModelView(SupersetModelView, DeleteMixin):  # noqa
         ids = "".join("&id={}".format(d.id) for d in items)
         return redirect("/dashboard/export_dashboards_form?{}".format(ids[1:]))
 
-    @log_this
+    @event_logger.log_this
     @has_access
     @expose("/export_dashboards_form")
     def download_dashboards(self):
@@ -949,7 +952,7 @@ class KV(BaseSupersetView):
 
     """Used for storing and retrieving key value pairs"""
 
-    @log_this
+    @event_logger.log_this
     @has_access_api
     @expose("/store/", methods=["POST"])
     def store(self):
@@ -962,7 +965,7 @@ class KV(BaseSupersetView):
             return json_error_response(e)
         return Response(json.dumps({"id": obj.id}), status=200)
 
-    @log_this
+    @event_logger.log_this
     @has_access_api
     @expose("/<key_id>/", methods=["GET"])
     def get_value(self, key_id):
@@ -981,7 +984,7 @@ class R(BaseSupersetView):
 
     """used for short urls"""
 
-    @log_this
+    @event_logger.log_this
     @expose("/<url_id>")
     def index(self, url_id):
         url = db.session.query(models.Url).filter_by(id=url_id).first()
@@ -996,7 +999,7 @@ class R(BaseSupersetView):
             flash("URL to nowhere...", "danger")
             return redirect("/")
 
-    @log_this
+    @event_logger.log_this
     @has_access_api
     @expose("/shortner/", methods=["POST"])
     def shortner(self):
@@ -1078,7 +1081,7 @@ class Superset(BaseSupersetView):
             {"granted": granted_perms, "requested": list(db_ds_names)}, status=201
         )
 
-    @log_this
+    @event_logger.log_this
     @has_access
     @expose("/request_access/")
     def request_access(self):
@@ -1123,7 +1126,7 @@ class Superset(BaseSupersetView):
             datasource_names=", ".join([o.name for o in datasources]),
         )
 
-    @log_this
+    @event_logger.log_this
     @has_access
     @expose("/approve")
     def approve(self):
@@ -1361,7 +1364,7 @@ class Superset(BaseSupersetView):
         payload = viz_obj.get_payload()
         return data_payload_response(*viz_obj.payload_json_and_has_error(payload))
 
-    @log_this
+    @event_logger.log_this
     @api
     @has_access_api
     @expose("/slice_json/<slice_id>")
@@ -1378,7 +1381,7 @@ class Superset(BaseSupersetView):
         )
         return self.generate_json(viz_obj)
 
-    @log_this
+    @event_logger.log_this
     @api
     @has_access_api
     @expose("/annotation_json/<layer_id>")
@@ -1391,7 +1394,7 @@ class Superset(BaseSupersetView):
         payload = viz_obj.get_payload()
         return data_payload_response(*viz_obj.payload_json_and_has_error(payload))
 
-    @log_this
+    @event_logger.log_this
     @api
     @has_access_api
     @handle_api_exception
@@ -1434,18 +1437,37 @@ class Superset(BaseSupersetView):
             viz_obj, csv=csv, query=query, results=results, samples=samples
         )
 
-    @log_this
+    @event_logger.log_this
     @has_access
     @expose("/import_dashboards", methods=["GET", "POST"])
     def import_dashboards(self):
         """Overrides the dashboards using json instances from the file."""
         f = request.files.get("file")
         if request.method == "POST" and f:
-            dashboard_import_export.import_dashboards(db.session, f.stream)
+            try:
+                dashboard_import_export.import_dashboards(db.session, f.stream)
+            except DatabaseNotFound as e:
+                flash(
+                    _(
+                        "Cannot import dashboard: %(db_error)s.\n"
+                        "Make sure to create the database before "
+                        "importing the dashboard.",
+                        db_error=e,
+                    ),
+                    "danger",
+                )
+            except Exception:
+                flash(
+                    _(
+                        "An unknown error occurred. "
+                        "Please contact your Superset administrator"
+                    ),
+                    "danger",
+                )
             return redirect("/dashboard/list/")
         return self.render_template("superset/import_dashboards.html")
 
-    @log_this
+    @event_logger.log_this
     @has_access
     @expose("/explorev2/<datasource_type>/<datasource_id>/")
     def explorev2(self, datasource_type, datasource_id):
@@ -1459,7 +1481,7 @@ class Superset(BaseSupersetView):
             )
         )
 
-    @log_this
+    @event_logger.log_this
     @has_access
     @expose("/explore/<datasource_type>/<datasource_id>/", methods=["GET", "POST"])
     @expose("/explore/", methods=["GET", "POST"])
@@ -1991,47 +2013,32 @@ class Superset(BaseSupersetView):
     def testconn(self):
         """Tests a sqla connection"""
         try:
-            username = g.user.username if g.user is not None else None
-            uri = request.json.get("uri")
             db_name = request.json.get("name")
-            impersonate_user = request.json.get("impersonate_user")
-            database = None
+            uri = request.json.get("uri")
+
+            # if the database already exists in the database, only its safe (password-masked) URI
+            # would be shown in the UI and would be passed in the form data.
+            # so if the database already exists and the form was submitted with the safe URI,
+            # we assume we should retrieve the decrypted URI to test the connection.
             if db_name:
-                database = (
+                existing_database = (
                     db.session.query(models.Database)
                     .filter_by(database_name=db_name)
                     .first()
                 )
-                if database and uri == database.safe_sqlalchemy_uri():
-                    # the password-masked uri was passed
-                    # use the URI associated with this database
-                    uri = database.sqlalchemy_uri_decrypted
+                if existing_database and uri == existing_database.safe_sqlalchemy_uri():
+                    uri = existing_database.sqlalchemy_uri_decrypted
 
-            configuration = {}
+            # this is the database instance that will be tested
+            database = models.Database(
+                # extras is sent as json, but required to be a string in the Database model
+                extra=json.dumps(request.json.get("extras", {})),
+                impersonate_user=request.json.get("impersonate_user"),
+            )
+            database.set_sqlalchemy_uri(uri)
 
-            if database and uri:
-                url = make_url(uri)
-                db_engine = models.Database.get_db_engine_spec_for_backend(
-                    url.get_backend_name()
-                )
-                db_engine.patch()
-
-                masked_url = database.get_password_masked_url_from_uri(uri)
-                logging.info("Superset.testconn(). Masked URL: {0}".format(masked_url))
-
-                configuration.update(
-                    db_engine.get_configuration_for_impersonation(
-                        uri, impersonate_user, username
-                    )
-                )
-
-            engine_params = request.json.get("extras", {}).get("engine_params", {})
-            connect_args = engine_params.get("connect_args")
-
-            if configuration and connect_args is not None:
-                connect_args["configuration"] = configuration
-
-            engine = create_engine(uri, **engine_params)
+            username = g.user.username if g.user is not None else None
+            engine = database.get_sqla_engine(user_name=username)
 
             with closing(engine.connect()) as conn:
                 conn.scalar(select([1]))
@@ -2039,9 +2046,7 @@ class Superset(BaseSupersetView):
         except Exception as e:
             logging.exception(e)
             return json_error_response(
-                ("Connection failed!\n\n" "The error message returned was:\n{}").format(
-                    e
-                )
+                "Connection failed!\n\n" "The error message returned was:\n{}".format(e)
             )
 
     @api
@@ -2425,7 +2430,7 @@ class Superset(BaseSupersetView):
         edit_mode = request.args.get("edit") == "true"
 
         # Hack to log the dashboard_id properly, even when getting a slug
-        @log_this
+        @event_logger.log_this
         def dashboard(**kwargs):  # noqa
             pass
 
@@ -2468,14 +2473,14 @@ class Superset(BaseSupersetView):
         )
 
     @api
-    @log_this
+    @event_logger.log_this
     @expose("/log/", methods=["POST"])
     def log(self):
         return Response(status=200)
 
     @has_access
     @expose("/sync_druid/", methods=["POST"])
-    @log_this
+    @event_logger.log_this
     def sync_druid_source(self):
         """Syncs the druid datasource in main db with the provided config.
 
@@ -2531,7 +2536,7 @@ class Superset(BaseSupersetView):
 
     @has_access
     @expose("/sqllab_viz/", methods=["POST"])
-    @log_this
+    @event_logger.log_this
     def sqllab_viz(self):
         SqlaTable = ConnectorRegistry.sources["table"]
         data = json.loads(request.form.get("data"))
@@ -2568,7 +2573,7 @@ class Superset(BaseSupersetView):
 
     @has_access
     @expose("/table/<database_id>/<table_name>/<schema>/")
-    @log_this
+    @event_logger.log_this
     def table(self, database_id, table_name, schema):
         schema = utils.parse_js_uri_path_item(schema, eval_undefined=True)
         table_name = utils.parse_js_uri_path_item(table_name)
@@ -2632,7 +2637,7 @@ class Superset(BaseSupersetView):
 
     @has_access
     @expose("/extra_table_metadata/<database_id>/<table_name>/<schema>/")
-    @log_this
+    @event_logger.log_this
     def extra_table_metadata(self, database_id, table_name, schema):
         schema = utils.parse_js_uri_path_item(schema, eval_undefined=True)
         table_name = utils.parse_js_uri_path_item(table_name)
@@ -2643,7 +2648,7 @@ class Superset(BaseSupersetView):
     @has_access
     @expose("/select_star/<database_id>/<table_name>")
     @expose("/select_star/<database_id>/<table_name>/<schema>")
-    @log_this
+    @event_logger.log_this
     def select_star(self, database_id, table_name, schema=None):
         mydb = db.session.query(models.Database).filter_by(id=database_id).first()
         schema = utils.parse_js_uri_path_item(schema, eval_undefined=True)
@@ -2658,7 +2663,7 @@ class Superset(BaseSupersetView):
 
     @has_access_api
     @expose("/cached_key/<key>/")
-    @log_this
+    @event_logger.log_this
     def cached_key(self, key):
         """Returns a key from the cache"""
         resp = cache.get(key)
@@ -2668,7 +2673,7 @@ class Superset(BaseSupersetView):
 
     @has_access_api
     @expose("/cache_key_exist/<key>/")
-    @log_this
+    @event_logger.log_this
     def cache_key_exist(self, key):
         """Returns if a key from cache exist"""
         key_exist = True if cache.get(key) else False
@@ -2677,7 +2682,7 @@ class Superset(BaseSupersetView):
 
     @has_access_api
     @expose("/results/<key>/")
-    @log_this
+    @event_logger.log_this
     def results(self, key):
         """Serves a key off of the results backend"""
         if not results_backend:
@@ -2720,7 +2725,7 @@ class Superset(BaseSupersetView):
 
     @has_access_api
     @expose("/stop_query/", methods=["POST"])
-    @log_this
+    @event_logger.log_this
     def stop_query(self):
         client_id = request.form.get("client_id")
         try:
@@ -2733,7 +2738,7 @@ class Superset(BaseSupersetView):
 
     @has_access_api
     @expose("/validate_sql_json/", methods=["POST", "GET"])
-    @log_this
+    @event_logger.log_this
     def validate_sql_json(self):
         """Validates that arbitrary sql is acceptable for the given database.
         Returns a list of error/warning annotations as json.
@@ -2796,7 +2801,7 @@ class Superset(BaseSupersetView):
 
     @has_access_api
     @expose("/sql_json/", methods=["POST", "GET"])
-    @log_this
+    @event_logger.log_this
     def sql_json(self):
         """Runs arbitrary sql and returns and json"""
         async_ = request.form.get("runAsync") == "true"
@@ -2936,7 +2941,7 @@ class Superset(BaseSupersetView):
 
     @has_access
     @expose("/csv/<client_id>")
-    @log_this
+    @event_logger.log_this
     def csv(self, client_id):
         """Download the query results as csv."""
         logging.info("Exporting CSV file [{}]".format(client_id))
@@ -2983,7 +2988,7 @@ class Superset(BaseSupersetView):
     @handle_api_exception
     @has_access
     @expose("/fetch_datasource_metadata")
-    @log_this
+    @event_logger.log_this
     def fetch_datasource_metadata(self):
         datasource_id, datasource_type = request.args.get("datasourceKey").split("__")
         datasource = ConnectorRegistry.get_datasource(
@@ -3025,7 +3030,7 @@ class Superset(BaseSupersetView):
 
     @has_access
     @expose("/search_queries")
-    @log_this
+    @event_logger.log_this
     def search_queries(self) -> Response:
         """
         Search for previously run sqllab queries. Used for Sqllab Query Search
