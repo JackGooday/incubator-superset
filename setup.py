@@ -66,7 +66,7 @@ setup(
     scripts=["superset/bin/superset"],
     install_requires=[
         "bleach>=3.0.2, <4.0.0",
-        "celery>=4.2.0, <5.0.0",
+        "celery>=4.3.0, <5.0.0",
         "click>=6.0, <7.0.0",  # `click`>=7 forces "-" instead of "_"
         "colorama",
         "contextlib2",
@@ -80,12 +80,12 @@ setup(
         "flask-migrate",
         "flask-wtf",
         "geopy",
-        "gunicorn",  # deprecated
+        "gunicorn<19.9.0",  # deprecated
         "humanize",
         "idna",
         "isodate",
         "markdown>=3.0",
-        "pandas>=0.18.0, <0.24.0",  # `pandas`>=0.24.0 changes datetimelike API
+        "pandas>=0.24.2, <0.25.0",
         "parsedatetime",
         "pathlib2",
         "polyline",
@@ -100,7 +100,7 @@ setup(
         "simplejson>=3.15.0",
         "sqlalchemy>=1.3.5,<2.0",
         "sqlalchemy-utils>=0.33.2",
-        "sqlparse",
+        "sqlparse<0.3",
         "wtforms-json",
     ],
     extras_require={
