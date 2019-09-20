@@ -31,6 +31,7 @@ import logging
 import math
 import pickle as pkl
 import re
+from typing import Any, Dict, List, Optional
 import uuid
 
 from dateutil import relativedelta as rdelta
@@ -77,7 +78,7 @@ class BaseViz(object):
 
     """All visualizations derive this base class"""
 
-    viz_type = None
+    viz_type: Optional[str] = None
     verbose_name = "Base Viz"
     credits = ""
     is_timeseries = False
@@ -181,7 +182,9 @@ class BaseViz(object):
         df = self.get_df(query_obj)
         return df.to_dict(orient="records")
 
-    def get_df(self, query_obj=None):
+    def get_df(
+        self, query_obj: Optional[Dict[str, Any]] = None
+    ) -> Optional[pd.DataFrame]:
         """Returns a pandas dataframe based on the query object"""
         if not query_obj:
             query_obj = self.query_obj()
@@ -629,9 +632,7 @@ class TimeTableViz(BaseViz):
         if fd.get("groupby"):
             values = self.metric_labels[0]
             columns = fd.get("groupby")
-        pt = df.pivot_table(
-            index=DTTM_ALIAS, columns=columns, values=values, dropna=False
-        )
+        pt = df.pivot_table(index=DTTM_ALIAS, columns=columns, values=values)
         pt.index = pt.index.map(str)
         pt = pt.sort_index()
         return dict(
@@ -697,7 +698,6 @@ class PivotTableViz(BaseViz):
             values=[utils.get_metric_name(m) for m in self.form_data.get("metrics")],
             aggfunc=aggfunc,
             margins=self.form_data.get("pivot_margins"),
-            dropna=False,
         )
         # Display metrics side by side with each column
         if self.form_data.get("combine_metric"):
@@ -725,7 +725,9 @@ class MarkupViz(BaseViz):
     def query_obj(self):
         return None
 
-    def get_df(self, query_obj=None):
+    def get_df(
+        self, query_obj: Optional[Dict[str, Any]] = None
+    ) -> Optional[pd.DataFrame]:
         return None
 
     def get_data(self, df):
@@ -858,7 +860,7 @@ class NVD3Viz(BaseViz):
     """Base class for all nvd3 vizs"""
 
     credits = '<a href="http://nvd3.org/">NVD3.org</a>'
-    viz_type = None
+    viz_type: Optional[str] = None
     verbose_name = "Base NVD3 Viz"
     is_timeseries = False
 
@@ -966,7 +968,9 @@ class BubbleViz(NVD3Viz):
         self.series = form_data.get("series") or self.entity
         d["row_limit"] = form_data.get("limit")
 
-        d["metrics"] = list(set([self.z_metric, self.x_metric, self.y_metric]))
+        d["metrics"] = [self.z_metric, self.x_metric, self.y_metric]
+        if len(set(self.metric_labels)) < 3:
+            raise Exception(_("Please use 3 different metric labels"))
         if not all(d["metrics"] + [self.entity]):
             raise Exception(_("Pick a metric for x, y and size"))
         return d
@@ -1068,6 +1072,9 @@ class BigNumberTotalViz(BaseViz):
             raise Exception(_("Pick a metric!"))
         d["metrics"] = [self.form_data.get("metric")]
         self.form_data["metric"] = metric
+
+        # Limiting rows is not required as only one cell is returned
+        d["row_limit"] = None
         return d
 
 
@@ -1148,14 +1155,10 @@ class NVD3TimeSeriesViz(NVD3Viz):
                 values=self.metric_labels,
                 fill_value=0,
                 aggfunc=sum,
-                dropna=False,
             )
         else:
             df = df.pivot_table(
-                index=DTTM_ALIAS,
-                columns=fd.get("groupby"),
-                values=self.metric_labels,
-                dropna=False,
+                index=DTTM_ALIAS, columns=fd.get("groupby"), values=self.metric_labels
             )
 
         rule = fd.get("resample_rule")
@@ -1366,7 +1369,7 @@ class NVD3DualLineViz(NVD3Viz):
 
         metric = utils.get_metric_name(fd.get("metric"))
         metric_2 = utils.get_metric_name(fd.get("metric_2"))
-        df = df.pivot_table(index=DTTM_ALIAS, values=[metric, metric_2], dropna=False)
+        df = df.pivot_table(index=DTTM_ALIAS, values=[metric, metric_2])
 
         chart_data = self.to_series(df)
         return chart_data
@@ -1398,7 +1401,11 @@ class NVD3TimePivotViz(NVD3TimeSeriesViz):
         fd = self.form_data
         df = self.process_data(df)
         freq = to_offset(fd.get("freq"))
-        freq.normalize = True
+        try:
+            freq = type(freq)(freq.n, normalize=True, **freq.kwds)
+        except ValueError:
+            freq = type(freq)(freq.n, **freq.kwds)
+        df.index.name = None
         df[DTTM_ALIAS] = df.index.map(freq.rollback)
         df["ranked"] = df[DTTM_ALIAS].rank(method="dense", ascending=False) - 1
         df.ranked = df.ranked.map(int)
@@ -1414,7 +1421,6 @@ class NVD3TimePivotViz(NVD3TimeSeriesViz):
             index=DTTM_ALIAS,
             columns="series",
             values=utils.get_metric_name(fd.get("metric")),
-            dropna=False,
         )
         chart_data = self.to_series(df)
         for serie in chart_data:
@@ -1450,7 +1456,7 @@ class DistributionPieViz(NVD3Viz):
 
     def get_data(self, df):
         metric = self.metric_labels[0]
-        df = df.pivot_table(index=self.groupby, values=[metric], dropna=False)
+        df = df.pivot_table(index=self.groupby, values=[metric])
         df.sort_values(by=metric, ascending=False, inplace=True)
         df = df.reset_index()
         df.columns = ["x", "y"]
@@ -1538,9 +1544,7 @@ class DistributionBarViz(DistributionPieViz):
         row = df.groupby(self.groupby).sum()[metrics[0]].copy()
         row.sort_values(ascending=False, inplace=True)
         columns = fd.get("columns") or []
-        pt = df.pivot_table(
-            index=self.groupby, columns=columns, values=metrics, dropna=False
-        )
+        pt = df.pivot_table(index=self.groupby, columns=columns, values=metrics)
         if fd.get("contribution"):
             pt = pt.T
             pt = (pt / pt.sum()).T
@@ -1847,7 +1851,7 @@ class IFrameViz(BaseViz):
     def query_obj(self):
         return None
 
-    def get_df(self, query_obj=None):
+    def get_df(self, query_obj: Dict[str, Any] = None) -> Optional[pd.DataFrame]:
         return None
 
     def get_data(self, df):
@@ -2106,7 +2110,7 @@ class BaseDeckGLViz(BaseViz):
 
     is_timeseries = False
     credits = '<a href="https://uber.github.io/deck.gl/">deck.gl</a>'
-    spatial_control_keys = []
+    spatial_control_keys: List[str] = []
 
     def get_metrics(self):
         self.metric = self.form_data.get("size")
@@ -2425,7 +2429,9 @@ class DeckPolygon(DeckPathViz):
         fd = self.form_data
         elevation = fd["point_radius_fixed"]["value"]
         type_ = fd["point_radius_fixed"]["type"]
-        d["elevation"] = d.get(elevation["label"]) if type_ == "metric" else elevation
+        d["elevation"] = (
+            d.get(utils.get_metric_name(elevation)) if type_ == "metric" else elevation
+        )
         return d
 
 

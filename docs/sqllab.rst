@@ -56,7 +56,7 @@ Templating with Jinja
 
     SELECT *
     FROM some_table
-    WHERE partition_key = '{{ presto.latest_partition('some_table') }}'
+    WHERE partition_key = '{{ presto.first_latest_partition('some_table') }}'
 
 Templating unleashes the power and capabilities of a
 programming language within your SQL code.
@@ -103,3 +103,22 @@ it's possible for administrators to expose more more macros in their
 environment using the configuration variable ``JINJA_CONTEXT_ADDONS``.
 All objects referenced in this dictionary will become available for users
 to integrate in their queries in **SQL Lab**.
+
+Query cost estimation
+'''''''''''''''''''''
+
+Some databases support ``EXPLAIN`` queries that allow users to estimate the cost
+of queries before executing this. Currently, Presto is supported in SQL Lab. To
+enable query cost estimation, add the following keys to the "Extra" field in the
+database configuration:
+
+.. code-block:: json
+
+    {
+        "version": "0.319",
+        "cost_estimate_enabled": true,
+        ...
+    }
+
+Here, "version" should be the version of your Presto cluster. Support for this
+functionality was introduced in Presto 0.319.

@@ -15,32 +15,103 @@
 # specific language governing permissions and limitations
 # under the License.
 # pylint: disable=C,R,W
-from collections import OrderedDict
+from collections import defaultdict, deque, OrderedDict
+from contextlib import closing
+from datetime import datetime
+from distutils.version import StrictVersion
 import logging
 import re
 import textwrap
 import time
-from typing import List, Set, Tuple
+from typing import Any, cast, Dict, List, Optional, Set, Tuple, TYPE_CHECKING
 from urllib import parse
 
-from sqlalchemy import Column, literal_column, types
+import simplejson as json
+from sqlalchemy import Column, literal_column
 from sqlalchemy.engine.base import Engine
 from sqlalchemy.engine.reflection import Inspector
 from sqlalchemy.engine.result import RowProxy
-from sqlalchemy.sql.expression import ColumnClause
+from sqlalchemy.sql.expression import ColumnClause, Select
 
+from superset import app, is_feature_enabled, security_manager
 from superset.db_engine_specs.base import BaseEngineSpec
 from superset.exceptions import SupersetTemplateException
 from superset.models.sql_types.presto_sql_types import type_map as presto_type_map
+from superset.sql_parse import ParsedQuery
 from superset.utils import core as utils
 
+if TYPE_CHECKING:
+    # prevent circular imports
+    from superset.models.core import Database
+
 QueryStatus = utils.QueryStatus
+config = app.config
+
+# map between Presto types and Pandas
+pandas_dtype_map = {
+    "boolean": "bool",
+    "tinyint": "Int64",  # note: capital "I" means nullable int
+    "smallint": "Int64",
+    "integer": "Int64",
+    "bigint": "Int64",
+    "real": "float64",
+    "double": "float64",
+    "varchar": "object",
+    "timestamp": "datetime64[ns]",
+    "date": "datetime64[ns]",
+    "varbinary": "object",
+}
+
+
+def get_children(column: Dict[str, str]) -> List[Dict[str, str]]:
+    """
+    Get the children of a complex Presto type (row or array).
+
+    For arrays, we return a single list with the base type:
+
+        >>> get_children(dict(name="a", type="ARRAY(BIGINT)"))
+        [{"name": "a", "type": "BIGINT"}]
+
+    For rows, we return a list of the columns:
+
+        >>> get_children(dict(name="a", type="ROW(BIGINT,FOO VARCHAR)"))
+        [{'name': 'a._col0', 'type': 'BIGINT'}, {'name': 'a.foo', 'type': 'VARCHAR'}]
+
+    :param column: dictionary representing a Presto column
+    :return: list of dictionaries representing children columns
+    """
+    pattern = re.compile("(?P<type>\w+)\((?P<children>.*)\)")
+    match = pattern.match(column["type"])
+    if not match:
+        raise Exception(f"Unable to parse column type {column['type']}")
+
+    group = match.groupdict()
+    type_ = group["type"].upper()
+    children_type = group["children"]
+    if type_ == "ARRAY":
+        return [{"name": column["name"], "type": children_type}]
+    elif type_ == "ROW":
+        nameless_columns = 0
+        columns = []
+        for child in utils.split(children_type, ","):
+            parts = list(utils.split(child.strip(), " "))
+            if len(parts) == 2:
+                name, type_ = parts
+                name = name.strip('"')
+            else:
+                name = f"_col{nameless_columns}"
+                type_ = parts[0]
+                nameless_columns += 1
+            columns.append({"name": f"{column['name']}.{name.lower()}", "type": type_})
+        return columns
+    else:
+        raise Exception(f"Unknown type {type_}!")
 
 
 class PrestoEngineSpec(BaseEngineSpec):
     engine = "presto"
 
-    time_grain_functions = {
+    _time_grain_functions = {
         None: "{col}",
         "PT1S": "date_trunc('second', CAST({col} AS TIMESTAMP))",
         "PT1M": "date_trunc('minute', CAST({col} AS TIMESTAMP))",
@@ -57,14 +128,48 @@ class PrestoEngineSpec(BaseEngineSpec):
     }
 
     @classmethod
-    def get_view_names(cls, inspector, schema):
+    def get_allow_cost_estimate(cls, version: str = None) -> bool:
+        return version is not None and StrictVersion(version) >= StrictVersion("0.319")
+
+    @classmethod
+    def get_table_names(
+        cls, database: "Database", inspector: Inspector, schema: Optional[str]
+    ) -> List[str]:
+        tables = super().get_table_names(database, inspector, schema)
+        if not is_feature_enabled("PRESTO_SPLIT_VIEWS_FROM_TABLES"):
+            return tables
+
+        views = set(cls.get_view_names(database, inspector, schema))
+        actual_tables = set(tables) - views
+        return list(actual_tables)
+
+    @classmethod
+    def get_view_names(
+        cls, database: "Database", inspector: Inspector, schema: Optional[str]
+    ) -> List[str]:
         """Returns an empty list
 
         get_table_names() function returns all table names and view names,
         and get_view_names() is not implemented in sqlalchemy_presto.py
         https://github.com/dropbox/PyHive/blob/e25fc8440a0686bbb7a5db5de7cb1a77bdb4167a/pyhive/sqlalchemy_presto.py
         """
-        return []
+        if not is_feature_enabled("PRESTO_SPLIT_VIEWS_FROM_TABLES"):
+            return []
+
+        if schema:
+            sql = "SELECT table_name FROM information_schema.views WHERE table_schema=%(schema)s"
+            params = {"schema": schema}
+        else:
+            sql = "SELECT table_name FROM information_schema.views"
+            params = {}
+
+        engine = cls.get_engine(database, schema=schema)
+        with closing(engine.raw_connection()) as conn:
+            with closing(conn.cursor()) as cursor:
+                cursor.execute(sql, params)
+                results = cursor.fetchall()
+
+        return [row[0] for row in results]
 
     @classmethod
     def _create_column_info(cls, name: str, data_type: str) -> dict:
@@ -195,7 +300,7 @@ class PrestoEngineSpec(BaseEngineSpec):
 
     @classmethod
     def _show_columns(
-        cls, inspector: Inspector, table_name: str, schema: str
+        cls, inspector: Inspector, table_name: str, schema: Optional[str]
     ) -> List[RowProxy]:
         """
         Show presto column names
@@ -213,8 +318,8 @@ class PrestoEngineSpec(BaseEngineSpec):
 
     @classmethod
     def get_columns(
-        cls, inspector: Inspector, table_name: str, schema: str
-    ) -> List[dict]:
+        cls, inspector: Inspector, table_name: str, schema: Optional[str]
+    ) -> List[Dict[str, Any]]:
         """
         Get columns from a Presto data source. This includes handling row and
         array data types
@@ -229,7 +334,9 @@ class PrestoEngineSpec(BaseEngineSpec):
         for column in columns:
             try:
                 # parse column if it is a row or array
-                if "array" in column.Type or "row" in column.Type:
+                if is_feature_enabled("PRESTO_EXPAND_DATA") and (
+                    "array" in column.Type or "row" in column.Type
+                ):
                     structural_column_index = len(result)
                     cls._parse_structural_column(column.Column, column.Type, result)
                     result[structural_column_index]["nullable"] = getattr(
@@ -245,7 +352,7 @@ class PrestoEngineSpec(BaseEngineSpec):
                         column.Type, column.Column
                     )
                 )
-                column_type = types.NullType
+                column_type = "OTHER"
             column_info = cls._create_column_info(column.Column, column_type)
             column_info["nullable"] = getattr(column, "Null", True)
             column_info["default"] = None
@@ -334,7 +441,7 @@ class PrestoEngineSpec(BaseEngineSpec):
     @classmethod
     def select_star(
         cls,
-        my_db,
+        database,
         table_name: str,
         engine: Engine,
         schema: str = None,
@@ -342,21 +449,22 @@ class PrestoEngineSpec(BaseEngineSpec):
         show_cols: bool = False,
         indent: bool = True,
         latest_partition: bool = True,
-        cols: List[dict] = [],
+        cols: Optional[List[Dict[str, Any]]] = None,
     ) -> str:
         """
         Include selecting properties of row objects. We cannot easily break arrays into
         rows, so render the whole array in its own row and skip columns that correspond
         to an array's contents.
         """
+        cols = cols or []
         presto_cols = cols
-        if show_cols:
+        if is_feature_enabled("PRESTO_EXPAND_DATA") and show_cols:
             dot_regex = r"\.(?=(?:[^\"]*\"[^\"]*\")*[^\"]*$)"
             presto_cols = [
                 col for col in presto_cols if not re.search(dot_regex, col["name"])
             ]
-        return super(PrestoEngineSpec, cls).select_star(
-            my_db,
+        return super().select_star(
+            database,
             table_name,
             engine,
             schema,
@@ -366,6 +474,73 @@ class PrestoEngineSpec(BaseEngineSpec):
             latest_partition,
             presto_cols,
         )
+
+    @classmethod
+    def estimate_statement_cost(
+        cls, statement: str, database, cursor, user_name: str
+    ) -> Dict[str, str]:
+        """
+        Generate a SQL query that estimates the cost of a given statement.
+
+        :param statement: A single SQL statement
+        :param database: Database instance
+        :param cursor: Cursor instance
+        :param username: Effective username
+        """
+        parsed_query = ParsedQuery(statement)
+        sql = parsed_query.stripped()
+
+        SQL_QUERY_MUTATOR = config.get("SQL_QUERY_MUTATOR")
+        if SQL_QUERY_MUTATOR:
+            sql = SQL_QUERY_MUTATOR(sql, user_name, security_manager, database)
+
+        sql = f"EXPLAIN (TYPE IO, FORMAT JSON) {sql}"
+        cursor.execute(sql)
+
+        # the output from Presto is a single column and a single row containing
+        # JSON:
+        #
+        #   {
+        #     ...
+        #     "estimate" : {
+        #       "outputRowCount" : 8.73265878E8,
+        #       "outputSizeInBytes" : 3.41425774958E11,
+        #       "cpuCost" : 3.41425774958E11,
+        #       "maxMemory" : 0.0,
+        #       "networkCost" : 3.41425774958E11
+        #     }
+        #   }
+        result = json.loads(cursor.fetchone()[0])
+        estimate = result["estimate"]
+
+        def humanize(value: Any, suffix: str) -> str:
+            try:
+                value = int(value)
+            except ValueError:
+                return str(value)
+
+            prefixes = ["K", "M", "G", "T", "P", "E", "Z", "Y"]
+            prefix = ""
+            to_next_prefix = 1000
+            while value > to_next_prefix and prefixes:
+                prefix = prefixes.pop(0)
+                value //= to_next_prefix
+
+            return f"{value} {prefix}{suffix}"
+
+        cost = {}
+        columns = [
+            ("outputRowCount", "Output count", " rows"),
+            ("outputSizeInBytes", "Output size", "B"),
+            ("cpuCost", "CPU cost", ""),
+            ("maxMemory", "Max memory", "B"),
+            ("networkCost", "Network cost", ""),
+        ]
+        for key, label, suffix in columns:
+            if key in estimate:
+                cost[label] = humanize(estimate[key], suffix)
+
+        return cost
 
     @classmethod
     def adjust_database_uri(cls, uri, selected_schema=None):
@@ -380,7 +555,7 @@ class PrestoEngineSpec(BaseEngineSpec):
         return uri
 
     @classmethod
-    def convert_dttm(cls, target_type, dttm):
+    def convert_dttm(cls, target_type: str, dttm: datetime) -> str:
         tt = target_type.upper()
         if tt == "DATE":
             return "from_iso8601_date('{}')".format(dttm.isoformat()[:10])
@@ -389,7 +564,7 @@ class PrestoEngineSpec(BaseEngineSpec):
         return "'{}'".format(dttm.strftime("%Y-%m-%d %H:%M:%S"))
 
     @classmethod
-    def epoch_to_dttm(cls):
+    def epoch_to_dttm(cls) -> str:
         return "from_unixtime({col})"
 
     @classmethod
@@ -748,71 +923,139 @@ class PrestoEngineSpec(BaseEngineSpec):
         :return: list of all columns(selected columns and their nested fields),
                  expanded data set, listed of nested fields
         """
+        if not is_feature_enabled("PRESTO_EXPAND_DATA"):
+            return columns, data, []
+
+        # process each column, unnesting ARRAY types and expanding ROW types into new columns
+        to_process = deque((column, 0) for column in columns)
         all_columns: List[dict] = []
-        # Get the list of all columns (selected fields and their nested fields)
-        for column in columns:
-            if column["type"].startswith("ARRAY") or column["type"].startswith("ROW"):
-                cls._parse_structural_column(
-                    column["name"], column["type"].lower(), all_columns
-                )
-            else:
+        expanded_columns = []
+        current_array_level = None
+        while to_process:
+            column, level = to_process.popleft()
+            if column["name"] not in [column["name"] for column in all_columns]:
                 all_columns.append(column)
 
-        # Build graphs where the root node is a row or array and its children are that
-        # column's nested fields
-        row_column_hierarchy, array_column_hierarchy, expanded_columns = cls._create_row_and_array_hierarchy(
-            columns
-        )
+            # When unnesting arrays we need to keep track of how many extra rows
+            # were added, for each original row. This is necessary when we expand multiple
+            # arrays, so that the arrays after the first reuse the rows added by
+            # the first. every time we change a level in the nested arrays we
+            # reinitialize this.
+            if level != current_array_level:
+                unnested_rows: Dict[int, int] = defaultdict(int)
+                current_array_level = level
 
-        # Pull out a row's nested fields and their values into separate columns
-        ordered_row_columns = row_column_hierarchy.keys()
-        for datum in data:
-            for row_column in ordered_row_columns:
-                cls._expand_row_data(datum, row_column, row_column_hierarchy)
+            name = column["name"]
 
-        while array_column_hierarchy:
-            array_columns = list(array_column_hierarchy.keys())
-            # Determine what columns are ready to be processed.
-            array_columns_to_process, unprocessed_array_columns = cls._split_array_columns_by_process_state(
-                array_columns, array_column_hierarchy, data[0]
-            )
-            all_array_data = cls._process_array_data(
-                data, all_columns, array_column_hierarchy
-            )
-            # Consolidate the original data set and the expanded array data
-            cls._consolidate_array_data_into_data(data, all_array_data)
-            # Remove processed array columns from the graph
-            cls._remove_processed_array_columns(
-                unprocessed_array_columns, array_column_hierarchy
-            )
+            if column["type"].startswith("ARRAY("):
+                # keep processing array children; we append to the right so that
+                # multiple nested arrays are processed breadth-first
+                to_process.append((get_children(column)[0], level + 1))
+
+                # unnest array objects data into new rows
+                i = 0
+                while i < len(data):
+                    row = data[i]
+                    values = row.get(name)
+                    if values:
+                        # how many extra rows we need to unnest the data?
+                        extra_rows = len(values) - 1
+
+                        # how many rows were already added for this row?
+                        current_unnested_rows = unnested_rows[i]
+
+                        # add any necessary rows
+                        missing = extra_rows - current_unnested_rows
+                        for _ in range(missing):
+                            data.insert(i + current_unnested_rows + 1, {})
+                            unnested_rows[i] += 1
+
+                        # unnest array into rows
+                        for j, value in enumerate(values):
+                            data[i + j][name] = value
+
+                        # skip newly unnested rows
+                        i += unnested_rows[i]
+
+                    i += 1
+
+            if column["type"].startswith("ROW("):
+                # expand columns; we append them to the left so they are added
+                # immediately after the parent
+                expanded = get_children(column)
+                to_process.extendleft((column, level) for column in expanded)
+                expanded_columns.extend(expanded)
+
+                # expand row objects into new columns
+                for row in data:
+                    for value, col in zip(row.get(name) or [], expanded):
+                        row[col["name"]] = value
+
+        data = [
+            {k["name"]: row.get(k["name"], "") for k in all_columns} for row in data
+        ]
 
         return all_columns, data, expanded_columns
 
     @classmethod
-    def extra_table_metadata(cls, database, table_name, schema_name):
+    def extra_table_metadata(
+        cls, database, table_name: str, schema_name: str
+    ) -> Dict[str, Any]:
+        metadata = {}
+
         indexes = database.get_indexes(table_name, schema_name)
-        if not indexes:
-            return {}
-        cols = indexes[0].get("column_names", [])
-        full_table_name = table_name
-        if schema_name and "." not in table_name:
-            full_table_name = "{}.{}".format(schema_name, table_name)
-        pql = cls._partition_query(full_table_name)
-        col_names, latest_parts = cls.latest_partition(
-            table_name, schema_name, database, show_first=True
-        )
-        return {
-            "partitions": {
+        if indexes:
+            cols = indexes[0].get("column_names", [])
+            full_table_name = table_name
+            if schema_name and "." not in table_name:
+                full_table_name = "{}.{}".format(schema_name, table_name)
+            pql = cls._partition_query(full_table_name, database)
+            col_names, latest_parts = cls.latest_partition(
+                table_name, schema_name, database, show_first=True
+            )
+            latest_parts = latest_parts or tuple([None] * len(col_names))
+            metadata["partitions"] = {
                 "cols": cols,
                 "latest": dict(zip(col_names, latest_parts)),
                 "partitionQuery": pql,
             }
-        }
+
+        # flake8 is not matching `Optional[str]` to `Any` for some reason...
+        metadata["view"] = cast(
+            Any, cls.get_create_view(database, schema_name, table_name)
+        )
+
+        return metadata
+
+    @classmethod
+    def get_create_view(cls, database, schema: str, table: str) -> Optional[str]:
+        """
+        Return a CREATE VIEW statement, or `None` if not a view.
+
+        :param database: Database instance
+        :param schema: Schema name
+        :param table: Table (view) name
+        """
+        engine = cls.get_engine(database, schema)
+        with closing(engine.raw_connection()) as conn:
+            with closing(conn.cursor()) as cursor:
+                sql = f"SHOW CREATE VIEW {schema}.{table}"
+                cls.execute(cursor, sql)
+                try:
+                    polled = cursor.poll()
+                except Exception:  # not a VIEW
+                    return None
+                while polled:
+                    time.sleep(0.2)
+                    polled = cursor.poll()
+                rows = cls.fetch_data(cursor, 1)
+        return rows[0][0]
 
     @classmethod
     def handle_cursor(cls, cursor, query, session):
         """Updates progress information"""
-        logging.info("Polling the cursor for progress")
+        query_id = query.id
+        logging.info(f"Query {query_id}: Polling the cursor for progress")
         polled = cursor.poll()
         # poll returns dict -- JSON status information or ``None``
         # if the query is done
@@ -822,7 +1065,7 @@ class PrestoEngineSpec(BaseEngineSpec):
             # Update the object and wait for the kill signal.
             stats = polled.get("stats", {})
 
-            query = session.query(type(query)).filter_by(id=query.id).one()
+            query = session.query(type(query)).filter_by(id=query_id).one()
             if query.status in [QueryStatus.STOPPED, QueryStatus.TIMED_OUT]:
                 cursor.cancel()
                 break
@@ -839,18 +1082,18 @@ class PrestoEngineSpec(BaseEngineSpec):
                 if total_splits and completed_splits:
                     progress = 100 * (completed_splits / total_splits)
                     logging.info(
-                        "Query progress: {} / {} "
-                        "splits".format(completed_splits, total_splits)
+                        "Query {} progress: {} / {} "
+                        "splits".format(query_id, completed_splits, total_splits)
                     )
                     if progress > query.progress:
                         query.progress = progress
                     session.commit()
             time.sleep(1)
-            logging.info("Polling the cursor for progress")
+            logging.info(f"Query {query_id}: Polling the cursor for progress")
             polled = cursor.poll()
 
     @classmethod
-    def extract_error_message(cls, e):
+    def _extract_error_message(cls, e):
         if (
             hasattr(e, "orig")
             and type(e.orig).__name__ == "DatabaseError"
@@ -872,7 +1115,9 @@ class PrestoEngineSpec(BaseEngineSpec):
         return utils.error_msg_from_exception(e)
 
     @classmethod
-    def _partition_query(cls, table_name, limit=0, order_by=None, filters=None):
+    def _partition_query(
+        cls, table_name, database, limit=0, order_by=None, filters=None
+    ):
         """Returns a partition query
 
         :param table_name: the name of the table to get partitions from
@@ -900,10 +1145,20 @@ class PrestoEngineSpec(BaseEngineSpec):
                 l.append(f"{field} = '{value}'")
             where_clause = "WHERE " + " AND ".join(l)
 
+        presto_version = database.get_extra().get("version")
+
+        # Partition select syntax changed in v0.199, so check here.
+        # Default to the new syntax if version is unset.
+        partition_select_clause = (
+            f'SELECT * FROM "{table_name}$partitions"'
+            if not presto_version
+            or StrictVersion(presto_version) >= StrictVersion("0.199")
+            else f"SHOW PARTITIONS FROM {table_name}"
+        )
+
         sql = textwrap.dedent(
             f"""\
-            SELECT * FROM "{table_name}$partitions"
-
+            {partition_select_clause}
             {where_clause}
             {order_by_clause}
             {limit_clause}
@@ -912,37 +1167,45 @@ class PrestoEngineSpec(BaseEngineSpec):
         return sql
 
     @classmethod
-    def where_latest_partition(cls, table_name, schema, database, qry, columns=None):
+    def where_latest_partition(
+        cls,
+        table_name: str,
+        schema: str,
+        database,
+        query: Select,
+        columns: Optional[List] = None,
+    ) -> Optional[Select]:
         try:
             col_names, values = cls.latest_partition(
                 table_name, schema, database, show_first=True
             )
         except Exception:
             # table is not partitioned
-            return False
+            return None
 
         if values is None:
-            return False
+            return None
 
         column_names = {column.get("name") for column in columns or []}
         for col_name, value in zip(col_names, values):
             if col_name in column_names:
-                qry = qry.where(Column(col_name) == value)
-        return qry
+                query = query.where(Column(col_name) == value)
+        return query
 
     @classmethod
-    def _latest_partition_from_df(cls, df):
+    def _latest_partition_from_df(cls, df) -> Optional[List[str]]:
         if not df.empty:
             return df.to_records(index=False)[0].item()
+        return None
 
     @classmethod
-    def latest_partition(cls, table_name, schema, database, show_first=False):
+    def latest_partition(
+        cls, table_name: str, schema: str, database, show_first: bool = False
+    ):
         """Returns col name and the latest (max) partition value for a table
 
         :param table_name: the name of the table
-        :type table_name: str
         :param schema: schema / database / namespace
-        :type schema: str
         :param database: database query will be run against
         :type database: models.Database
         :param show_first: displays the value for the first partitioning key
@@ -950,7 +1213,7 @@ class PrestoEngineSpec(BaseEngineSpec):
         :type show_first: bool
 
         >>> latest_partition('foo_table')
-        ('ds', '2018-01-01')
+        (['ds'], ('2018-01-01',))
         """
         indexes = database.get_indexes(table_name, schema)
         if len(indexes[0]["column_names"]) < 1:
@@ -965,7 +1228,7 @@ class PrestoEngineSpec(BaseEngineSpec):
             )
         column_names = indexes[0]["column_names"]
         part_fields = [(column_name, True) for column_name in column_names]
-        sql = cls._partition_query(table_name, 1, part_fields)
+        sql = cls._partition_query(table_name, database, 1, part_fields)
         df = database.get_df(sql, schema)
         return column_names, cls._latest_partition_from_df(df)
 
@@ -1012,8 +1275,16 @@ class PrestoEngineSpec(BaseEngineSpec):
             if field not in kwargs.keys():
                 field_to_return = field
 
-        sql = cls._partition_query(table_name, 1, [(field_to_return, True)], kwargs)
+        sql = cls._partition_query(
+            table_name, database, 1, [(field_to_return, True)], kwargs
+        )
         df = database.get_df(sql, schema)
         if df.empty:
             return ""
         return df.to_dict()[field_to_return][0]
+
+    @classmethod
+    def get_pandas_dtype(cls, cursor_description: List[tuple]) -> Dict[str, str]:
+        return {
+            col[0]: pandas_dtype_map.get(col[1], "object") for col in cursor_description
+        }

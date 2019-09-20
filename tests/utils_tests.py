@@ -45,9 +45,10 @@ from superset.utils.core import (
     parse_js_uri_path_item,
     parse_past_timedelta,
     setup_cache,
+    split,
     validate_json,
     zlib_compress,
-    zlib_decompress_to_string,
+    zlib_decompress,
 )
 
 
@@ -140,7 +141,7 @@ class UtilsTestCase(unittest.TestCase):
     def test_zlib_compression(self):
         json_str = '{"test": 1}'
         blob = zlib_compress(json_str)
-        got_str = zlib_decompress_to_string(blob)
+        got_str = zlib_decompress(blob)
         self.assertEquals(json_str, got_str)
 
     @patch("superset.utils.core.to_adhoc", mock_to_adhoc)
@@ -301,6 +302,7 @@ class UtilsTestCase(unittest.TestCase):
             "extra_filters": [
                 {"col": "a", "op": "in", "val": "someval"},
                 {"col": "B", "op": "==", "val": ["c1", "c2"]},
+                {"col": "c", "op": "in", "val": ["c1", 1, None]},
             ],
             "adhoc_filters": [
                 {
@@ -316,6 +318,13 @@ class UtilsTestCase(unittest.TestCase):
                     "expressionType": "SIMPLE",
                     "operator": "==",
                     "subject": "B",
+                },
+                {
+                    "clause": "WHERE",
+                    "comparator": ["c1", 1, None],
+                    "expressionType": "SIMPLE",
+                    "operator": "in",
+                    "subject": "c",
                 },
             ],
         }
@@ -334,6 +343,13 @@ class UtilsTestCase(unittest.TestCase):
                     "expressionType": "SIMPLE",
                     "operator": "==",
                     "subject": "B",
+                },
+                {
+                    "clause": "WHERE",
+                    "comparator": ["c1", 1, None],
+                    "expressionType": "SIMPLE",
+                    "operator": "in",
+                    "subject": "c",
                 },
             ]
         }
@@ -816,6 +832,20 @@ class UtilsTestCase(unittest.TestCase):
             except Exception:
                 stacktrace = get_stacktrace()
                 assert stacktrace is None
+
+    def test_split(self):
+        self.assertEqual(list(split("a b")), ["a", "b"])
+        self.assertEqual(list(split("a,b", delimiter=",")), ["a", "b"])
+        self.assertEqual(list(split("a,(b,a)", delimiter=",")), ["a", "(b,a)"])
+        self.assertEqual(
+            list(split('a,(b,a),"foo , bar"', delimiter=",")),
+            ["a", "(b,a)", '"foo , bar"'],
+        )
+        self.assertEqual(
+            list(split("a,'b,c'", delimiter=",", quote="'")), ["a", "'b,c'"]
+        )
+        self.assertEqual(list(split('a "b c"')), ["a", '"b c"'])
+        self.assertEqual(list(split(r'a "b \" c"')), ["a", r'"b \" c"'])
 
     def test_get_or_create_db(self):
         get_or_create_db("test_db", "sqlite:///superset.db")
