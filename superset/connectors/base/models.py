@@ -14,43 +14,69 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
-# pylint: disable=C,R,W
 import json
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Hashable, List, Optional, Type
 
 from flask_appbuilder.security.sqla.models import User
 from sqlalchemy import and_, Boolean, Column, Integer, String, Text
 from sqlalchemy.ext.declarative import declared_attr
 from sqlalchemy.orm import foreign, Query, relationship
 
-from superset.models.core import Slice
+from superset.constants import NULL_STRING
 from superset.models.helpers import AuditMixinNullable, ImportMixin, QueryResult
+from superset.models.slice import Slice
 from superset.utils import core as utils
 
+METRIC_FORM_DATA_PARAMS = [
+    "metric",
+    "metrics",
+    "metric_2",
+    "percent_metrics",
+    "secondary_metric",
+    "size",
+    "timeseries_limit_metric",
+    "x",
+    "y",
+]
 
-class BaseDatasource(AuditMixinNullable, ImportMixin):
+COLUMN_FORM_DATA_PARAMS = [
+    "all_columns",
+    "all_columns_x",
+    "columns",
+    "entity",
+    "groupby",
+    "order_by_cols",
+    "series",
+]
+
+
+class BaseDatasource(
+    AuditMixinNullable, ImportMixin
+):  # pylint: disable=too-many-public-methods
     """A common interface to objects that are queryable
     (tables and datasources)"""
 
     # ---------------------------------------------------------------
     # class attributes to define when deriving BaseDatasource
     # ---------------------------------------------------------------
-    __tablename__ = None  # {connector_name}_datasource
-    type = None  # datasoure type, str to be defined when deriving this class
-    baselink = None  # url portion pointing to ModelView endpoint
-    column_class = None  # link to derivative of BaseColumn
-    metric_class = None  # link to derivative of BaseMetric
-    owner_class = None
+    __tablename__: Optional[str] = None  # {connector_name}_datasource
+    type: Optional[  # datasoure type, str to be defined when deriving this class
+        str
+    ] = None
+    baselink: Optional[str] = None  # url portion pointing to ModelView endpoint
+    column_class: Optional[Type] = None  # link to derivative of BaseColumn
+    metric_class: Optional[Type] = None  # link to derivative of BaseMetric
+    owner_class: Optional[User] = None
 
     # Used to do code highlighting when displaying the query in the UI
-    query_language = None
+    query_language: Optional[str] = None
 
     name = None  # can be a Column or a property pointing to one
 
     # ---------------------------------------------------------------
 
     # Columns
-    id = Column(Integer, primary_key=True)
+    id = Column(Integer, primary_key=True)  # pylint: disable=invalid-name
     description = Column(Text)
     default_endpoint = Column(Text)
     is_featured = Column(Boolean, default=False)  # TODO deprecating
@@ -59,6 +85,7 @@ class BaseDatasource(AuditMixinNullable, ImportMixin):
     cache_timeout = Column(Integer)
     params = Column(String(1000))
     perm = Column(String(1000))
+    schema_perm = Column(String(1000))
 
     sql: Optional[str] = None
     owners: List[User]
@@ -126,8 +153,7 @@ class BaseDatasource(AuditMixinNullable, ImportMixin):
     def explore_url(self) -> str:
         if self.default_endpoint:
             return self.default_endpoint
-        else:
-            return "/superset/explore/{obj.type}/{obj.id}/".format(obj=self)
+        return f"/superset/explore/{self.type}/{self.id}/"
 
     @property
     def column_formats(self) -> Dict[str, Optional[str]]:
@@ -163,10 +189,14 @@ class BaseDatasource(AuditMixinNullable, ImportMixin):
         """Data representation of the datasource sent to the frontend"""
         order_by_choices = []
         # self.column_names return sorted column_names
-        for s in self.column_names:
-            s = str(s or "")
-            order_by_choices.append((json.dumps([s, True]), s + " [asc]"))
-            order_by_choices.append((json.dumps([s, False]), s + " [desc]"))
+        for column_name in self.column_names:
+            column_name = str(column_name or "")
+            order_by_choices.append(
+                (json.dumps([column_name, True]), column_name + " [asc]")
+            )
+            order_by_choices.append(
+                (json.dumps([column_name, False]), column_name + " [desc]")
+            )
 
         verbose_map = {"__timestamp": "Time"}
         verbose_map.update(
@@ -205,6 +235,70 @@ class BaseDatasource(AuditMixinNullable, ImportMixin):
             "select_star": self.select_star,
         }
 
+    def data_for_slices(self, slices: List[Slice]) -> Dict[str, Any]:
+        """
+        The representation of the datasource containing only the required data
+        to render the provided slices.
+
+        Used to reduce the payload when loading a dashboard.
+        """
+        data = self.data
+        metric_names = set()
+        column_names = set()
+        for slc in slices:
+            form_data = slc.form_data
+
+            # pull out all required metrics from the form_data
+            for param in METRIC_FORM_DATA_PARAMS:
+                for metric in utils.get_iterable(form_data.get(param) or []):
+                    metric_names.add(utils.get_metric_name(metric))
+
+                    if utils.is_adhoc_metric(metric):
+                        column_names.add(
+                            (metric.get("column") or {}).get("column_name")
+                        )
+
+            # pull out all required columns from the form_data
+            for filter_ in form_data.get("adhoc_filters") or []:
+                if filter_["clause"] == "WHERE" and filter_.get("subject"):
+                    column_names.add(filter_.get("subject"))
+
+            for param in COLUMN_FORM_DATA_PARAMS:
+                for column in utils.get_iterable(form_data.get(param) or []):
+                    column_names.add(column)
+
+        filtered_metrics = [
+            metric
+            for metric in data["metrics"]
+            if metric["metric_name"] in metric_names
+        ]
+
+        filtered_columns = [
+            column
+            for column in data["columns"]
+            if column["column_name"] in column_names
+        ]
+
+        del data["description"]
+        data.update({"metrics": filtered_metrics})
+        data.update({"columns": filtered_columns})
+        verbose_map = {"__timestamp": "Time"}
+        verbose_map.update(
+            {
+                metric["metric_name"]: metric["verbose_name"] or metric["metric_name"]
+                for metric in filtered_metrics
+            }
+        )
+        verbose_map.update(
+            {
+                column["column_name"]: column["verbose_name"] or column["column_name"]
+                for column in filtered_columns
+            }
+        )
+        data["verbose_map"] = verbose_map
+
+        return data
+
     @staticmethod
     def filter_values_handler(
         values, target_column_is_numeric=False, is_list_target=False
@@ -217,7 +311,7 @@ class BaseDatasource(AuditMixinNullable, ImportMixin):
                     # For backwards compatibility and edge cases
                     # where a column data type might have changed
                     v = utils.string_to_num(v)
-                if v == "<NULL>":
+                if v == NULL_STRING:
                     return None
                 elif v == "<empty string>":
                     return ""
@@ -230,7 +324,7 @@ class BaseDatasource(AuditMixinNullable, ImportMixin):
         if is_list_target and not isinstance(values, (tuple, list)):
             values = [values]
         elif not is_list_target and isinstance(values, (tuple, list)):
-            if len(values) > 0:
+            if values:
                 values = values[0]
             else:
                 values = None
@@ -272,7 +366,10 @@ class BaseDatasource(AuditMixinNullable, ImportMixin):
                 return col
         return None
 
-    def get_fk_many_from_list(self, object_list, fkmany, fkmany_class, key_attr):
+    @staticmethod
+    def get_fk_many_from_list(
+        object_list, fkmany, fkmany_class, key_attr
+    ):  # pylint: disable=too-many-locals
         """Update ORM one-to-many list from object list
 
         Used for syncing metrics and columns using the same code"""
@@ -331,19 +428,32 @@ class BaseDatasource(AuditMixinNullable, ImportMixin):
             obj.get("columns"), self.columns, self.column_class, "column_name"
         )
 
-    def get_extra_cache_keys(self, query_obj: Dict) -> List[Any]:
+    def get_extra_cache_keys(  # pylint: disable=no-self-use
+        self, query_obj: Dict[str, Any]  # pylint: disable=unused-argument
+    ) -> List[Hashable]:
         """ If a datasource needs to provide additional keys for calculation of
         cache keys, those can be provided via this method
+
+        :param query_obj: The dict representation of a query object
+        :return: list of keys
         """
         return []
+
+    def __hash__(self) -> int:
+        return hash(self.uid)
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, BaseDatasource):
+            return NotImplemented
+        return self.uid == other.uid
 
 
 class BaseColumn(AuditMixinNullable, ImportMixin):
     """Interface for column"""
 
-    __tablename__ = None  # {connector_name}_column
+    __tablename__: Optional[str] = None  # {connector_name}_column
 
-    id = Column(Integer, primary_key=True)
+    id = Column(Integer, primary_key=True)  # pylint: disable=invalid-name
     column_name = Column(String(255), nullable=False)
     verbose_name = Column(String(1024))
     is_active = Column(Boolean, default=True)
@@ -371,15 +481,15 @@ class BaseColumn(AuditMixinNullable, ImportMixin):
         "DECIMAL",
         "MONEY",
     )
-    date_types = ("DATE", "TIME", "DATETIME")
+    date_types = ("DATE", "TIME")
     str_types = ("VARCHAR", "STRING", "CHAR")
 
     @property
-    def is_num(self) -> bool:
+    def is_numeric(self) -> bool:
         return self.type and any(map(lambda t: t in self.type.upper(), self.num_types))
 
     @property
-    def is_time(self) -> bool:
+    def is_temporal(self) -> bool:
         return self.type and any(map(lambda t: t in self.type.upper(), self.date_types))
 
     @property
@@ -388,6 +498,10 @@ class BaseColumn(AuditMixinNullable, ImportMixin):
 
     @property
     def expression(self):
+        raise NotImplementedError()
+
+    @property
+    def python_date_format(self):
         raise NotImplementedError()
 
     @property
@@ -402,7 +516,6 @@ class BaseColumn(AuditMixinNullable, ImportMixin):
             "groupby",
             "is_dttm",
             "type",
-            "python_date_format",
         )
         return {s: getattr(self, s) for s in attrs if hasattr(self, s)}
 
@@ -411,9 +524,9 @@ class BaseMetric(AuditMixinNullable, ImportMixin):
 
     """Interface for Metrics"""
 
-    __tablename__ = None  # {connector_name}_metric
+    __tablename__: Optional[str] = None  # {connector_name}_metric
 
-    id = Column(Integer, primary_key=True)
+    id = Column(Integer, primary_key=True)  # pylint: disable=invalid-name
     metric_name = Column(String(255), nullable=False)
     verbose_name = Column(String(1024))
     metric_type = Column(String(32))
