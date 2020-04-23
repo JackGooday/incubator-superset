@@ -772,6 +772,7 @@ class SupersetSecurityManager(SecurityManager):
                 "can_csv",
                 "can_search_queries",
                 "can_sqllab_viz",
+                "can_sqllab_table_viz",
                 "can_sqllab",
             }
             or (
@@ -918,7 +919,7 @@ class SupersetSecurityManager(SecurityManager):
                 .subquery()
             )
             filter_roles = (
-                db.session.query(RLSFilterRoles.c.id)
+                db.session.query(RLSFilterRoles.c.rls_filter_id)
                 .filter(RLSFilterRoles.c.role_id.in_(user_roles))
                 .subquery()
             )

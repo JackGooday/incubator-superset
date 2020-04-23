@@ -16,6 +16,8 @@
 # under the License.
 from typing import Optional
 
+from flask_babel import gettext as _
+
 
 class SupersetException(Exception):
     status = 500
@@ -60,5 +62,13 @@ class SpatialException(SupersetException):
     pass
 
 
+class CertificateException(SupersetException):
+    message = _("Invalid certificate")
+
+
 class DatabaseNotFound(SupersetException):
+    status = 400
+
+
+class QueryObjectValidationError(SupersetException):
     status = 400

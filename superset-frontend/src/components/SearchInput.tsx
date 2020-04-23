@@ -16,28 +16,14 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-import { t } from '@superset-ui/translation';
-import { NVD3TimeSeries } from './sections';
+import styled from '@superset-ui/style';
 
-export default {
-  controlPanelSections: [
-    NVD3TimeSeries[0],
-    {
-      label: t('Time Series Options'),
-      expanded: true,
-      controlSetRows: [['time_series_option']],
-    },
-    {
-      label: t('Chart Options'),
-      expanded: true,
-      controlSetRows: [
-        ['color_scheme', 'label_colors'],
-        ['number_format', 'date_time_format'],
-        ['partition_limit', 'partition_threshold'],
-        ['log_scale', 'equal_date_size'],
-        ['rich_tooltip'],
-      ],
-    },
-    NVD3TimeSeries[1],
-  ],
-};
+export default styled.input`
+  background-color: ${({ theme }) => theme.colors.secondary.light5};
+  background-image: none;
+  border: 1px solid ${({ theme }) => theme.colors.secondary.light2};
+  border-radius: 4px;
+  box-shadow: inset 0 1px 1px rgba(0, 0, 0, 0.075);
+  padding: 4px 8px;
+  transition: border-color 0.15s ease-in-out, box-shadow 0.15s ease-in-out;
+`;
