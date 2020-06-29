@@ -288,9 +288,10 @@ class CoreTests(SupersetTestCase):
         self.login(username="admin")
         slice_name = f"Energy Sankey"
         slice_id = self.get_slice(slice_name, db.session).id
-        copy_name = f"Test Sankey Save_{random.random()}"
+        copy_name_prefix = "Test Sankey"
+        copy_name = f"{copy_name_prefix}[save]{random.random()}"
         tbl_id = self.table_ids.get("energy_usage")
-        new_slice_name = f"Test Sankey Overwrite_{random.random()}"
+        new_slice_name = f"{copy_name_prefix}[overwrite]{random.random()}"
 
         url = (
             "/superset/explore/table/{}/?slice_name={}&"
@@ -298,8 +299,9 @@ class CoreTests(SupersetTestCase):
         )
 
         form_data = {
+            "adhoc_filters": [],
             "viz_type": "sankey",
-            "groupby": "target",
+            "groupby": ["target"],
             "metric": "sum__value",
             "row_limit": 5000,
             "slice_id": slice_id,
@@ -319,8 +321,9 @@ class CoreTests(SupersetTestCase):
         self.assertEqual(slc.viz.form_data, form_data)
 
         form_data = {
+            "adhoc_filters": [],
             "viz_type": "sankey",
-            "groupby": "source",
+            "groupby": ["source"],
             "metric": "sum__value",
             "row_limit": 5000,
             "slice_id": new_slice_id,
@@ -338,7 +341,13 @@ class CoreTests(SupersetTestCase):
         self.assertEqual(slc.viz.form_data, form_data)
 
         # Cleanup
-        db.session.delete(slc)
+        slices = (
+            db.session.query(Slice)
+            .filter(Slice.slice_name.like(copy_name_prefix + "%"))
+            .all()
+        )
+        for slc in slices:
+            db.session.delete(slc)
         db.session.commit()
 
     def test_filter_endpoint(self):
@@ -722,15 +731,6 @@ class CoreTests(SupersetTestCase):
         self.get_json_resp(slc_url, {"form_data": json.dumps(slc.form_data)})
         self.assertEqual(1, qry.count())
 
-    def test_slice_query_endpoint(self):
-        # API endpoint for query string
-        self.login(username="admin")
-        slc = self.get_slice("Girls", db.session)
-        resp = self.get_resp("/superset/slice_query/{}/".format(slc.id))
-        assert "query" in resp
-        assert "language" in resp
-        self.logout()
-
     def test_import_csv(self):
         self.login(username="admin")
         table_name = "".join(random.choice(string.ascii_uppercase) for _ in range(5))
@@ -875,7 +875,7 @@ class CoreTests(SupersetTestCase):
         rendered_query = str(table.get_from_clause())
         self.assertEqual(clean_query, rendered_query)
 
-    def test_slice_payload_no_data(self):
+    def test_slice_payload_no_results(self):
         self.login(username="admin")
         slc = self.get_slice("Girls", db.session)
         json_endpoint = "/superset/explore_json/"
@@ -895,7 +895,7 @@ class CoreTests(SupersetTestCase):
         )
         data = self.get_json_resp(json_endpoint, {"form_data": json.dumps(form_data)})
         self.assertEqual(data["status"], utils.QueryStatus.SUCCESS)
-        self.assertEqual(data["error"], "No data")
+        self.assertEqual(data["error"], None)
 
     def test_slice_payload_invalid_query(self):
         self.login(username="admin")
@@ -1168,7 +1168,7 @@ class CoreTests(SupersetTestCase):
 
         # we should have only 1 query returned, since the second one is not
         # associated with any tabs
-        payload = views.Superset._get_sqllab_payload(user_id=user_id)
+        payload = views.Superset._get_sqllab_tabs(user_id=user_id)
         self.assertEqual(len(payload["queries"]), 1)
 
 
