@@ -23,5 +23,11 @@
 # superset/config.py
 #
 
-SQLALCHEMY_DATABASE_URI = "postgresql+psycopg2://pguser:pgpwd@some.host/superset"
-SQLALCHEMY_ECHO = True
+# Redis caching example from:
+# https://superset.incubator.apache.org/installation.html#caching
+CACHE_CONFIG = {
+    'CACHE_TYPE': 'redis',
+    'CACHE_DEFAULT_TIMEOUT': 60 * 60 * 24, # 1 day default (in secs)
+    'CACHE_KEY_PREFIX': 'superset_results',
+    'CACHE_REDIS_URL': 'redis://localhost:6379/0',
+}
