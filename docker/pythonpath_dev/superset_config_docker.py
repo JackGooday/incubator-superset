@@ -25,9 +25,15 @@
 
 # Redis caching example from:
 # https://superset.incubator.apache.org/installation.html#caching
-#CACHE_CONFIG = {
-#    'CACHE_TYPE': 'redis',
-#    'CACHE_DEFAULT_TIMEOUT': 60 * 60 * 24, # 1 day default (in secs)
-#    'CACHE_KEY_PREFIX': 'superset_results',
-#    'CACHE_REDIS_URL': 'redis://localhost:6379/0',
-#}
+# You need to have the host in the CACHE_REDIS_URL set to *the name
+# of the Redis service in docker-compose.yml*, which is 'redis' (NOT
+# 'localhost' as in the examples, which you would use if not running
+# in Docker)
+# You also need to set up RESULTS_BACKEND to use RedisCache, not
+# FileSystemCache (more notes there)
+CACHE_CONFIG = {
+    'CACHE_TYPE': 'redis',
+    'CACHE_DEFAULT_TIMEOUT': 60 * 60 * 24, # 1 day default (in secs)
+    'CACHE_KEY_PREFIX': 'superset_results',
+    'CACHE_REDIS_URL': 'redis://redis:6379/0',
+}

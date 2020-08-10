@@ -25,7 +25,8 @@
 import logging
 import os
 
-from cachelib.file import FileSystemCache
+#from cachelib.file import FileSystemCache
+from cachelib.redis import RedisCache
 
 logger = logging.getLogger()
 
@@ -67,7 +68,13 @@ REDIS_CELERY_DB = get_env_variable("REDIS_CELERY_DB", 0)
 REDIS_RESULTS_DB = get_env_variable("REDIS_CELERY_DB", 1)
 
 
-RESULTS_BACKEND = FileSystemCache("/app/superset_home/sqllab")
+#RESULTS_BACKEND = FileSystemCache("/app/superset_home/sqllab")
+# Use a Redis cache instead of the default file system one
+# Make sure to use *the name of the Redis service in
+# docker-compose.yml* as host, which is 'redis' (NOT 'localhost' as in
+# the examples, which you would use if not running in Docker)
+RESULTS_BACKEND = RedisCache(
+    host='redis', port=6379, key_prefix='superset_results')
 
 
 class CeleryConfig(object):
