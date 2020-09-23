@@ -31,6 +31,11 @@ x-superset-volumes: &superset-volumes
   - superset_home:/app/superset_home
 
 version: "3.7"
+
+#networks:
+#  app-tier:
+#    driver: bridge
+
 services:
   redis:
     image: redis:3.2
@@ -61,6 +66,8 @@ services:
       - 8088:8088
     depends_on: *superset-depends-on
     volumes: *superset-volumes
+    #networks:
+    #  - app-tier
 
   superset-init:
     build: *superset-build
@@ -102,6 +109,39 @@ services:
     depends_on: *superset-depends-on
     volumes: *superset-volumes
 
+  # Create a test database as well as "Adminer",
+  # a tool for viewing the data in this database
+  # At the moment, when you want to access the
+  # database you need to either provide the host
+  # as 127.0.0.1, or use --protocol tcp
+  # In Superset, you need to use your IP address
+  # from the point of view of Docker (for me it
+  # was 172.20.0.1 - check console output)
+
+  testdb:
+    image: mariadb
+    container_name: testdb
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: example
+      MYSQL_DATABASE: mydb
+      MYSQL_USER: user
+      MYSQL_PASSWORD: user
+    ports:
+        - 3306:3306
+    volumes:
+        - testdb_vol:/docker-entrypoint-initdb.d
+    #networks:
+    #- app-tier
+
+  adminer:
+    image: adminer
+    container_name: adminer
+    restart: unless-stopped
+    ports:
+      - 8080:8080
+
+
 volumes:
   superset_home:
     external: false
@@ -109,3 +149,6 @@ volumes:
     external: false
   redis:
     external: false
+  testdb_vol:
+    external: false
+
