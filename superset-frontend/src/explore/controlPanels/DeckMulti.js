@@ -16,18 +16,16 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-import { t } from '@superset-ui/translation';
-import { validateNonEmpty } from '@superset-ui/validator';
-import { viewport } from './Shared_DeckGL';
+import { t, validateNonEmpty } from '@superset-ui/core';
+import { viewport, mapboxStyle } from './Shared_DeckGL';
 
 export default {
-  requiresTime: true,
   controlPanelSections: [
     {
       label: t('Map'),
       expanded: true,
       controlSetRows: [
-        ['mapbox_style', viewport],
+        [mapboxStyle, viewport],
         [
           {
             name: 'deck_slices',

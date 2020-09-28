@@ -16,11 +16,7 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-import { t } from '@superset-ui/translation';
-import {
-  validateNonEmpty,
-  legacyValidateInteger,
-} from '@superset-ui/validator';
+import { t, validateNonEmpty, legacyValidateInteger } from '@superset-ui/core';
 import timeGrainSqlaAnimationOverrides from './timeGrainSqlaAnimationOverrides';
 import { columnChoices, PRIMARY_COLOR } from '../controls';
 import { formatSelectOptions } from '../../modules/utils';
@@ -35,10 +31,10 @@ import {
   legendFormat,
   legendPosition,
   viewport,
+  mapboxStyle,
 } from './Shared_DeckGL';
 
 export default {
-  requiresTime: true,
   controlPanelSections: [
     {
       label: t('Query'),
@@ -77,7 +73,7 @@ export default {
     {
       label: t('Map'),
       controlSetRows: [
-        ['mapbox_style', viewport],
+        [mapboxStyle, viewport],
         [autozoom, null],
       ],
     },
@@ -99,15 +95,17 @@ export default {
         ],
         [
           {
-            ...dimension,
-            label: t('Categorical Color'),
-            description: t(
-              'Pick a dimension from which categorical colors are defined',
-            ),
+            name: 'dimension',
+            config: {
+              ...dimension.config,
+              label: t('Categorical Color'),
+              description: t(
+                'Pick a dimension from which categorical colors are defined',
+              ),
+            },
           },
-          'color_scheme',
-          'label_colors',
         ],
+        ['color_scheme', 'label_colors'],
         [
           {
             name: 'stroke_width',

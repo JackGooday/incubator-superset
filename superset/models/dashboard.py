@@ -17,6 +17,7 @@
 import json
 import logging
 from copy import copy
+from json.decoder import JSONDecodeError
 from typing import Any, Dict, List, Optional, Set, TYPE_CHECKING
 from urllib import parse
 
@@ -36,11 +37,13 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
 )
+from sqlalchemy.engine.base import Connection
 from sqlalchemy.orm import relationship, sessionmaker, subqueryload
+from sqlalchemy.orm.mapper import Mapper
 
 from superset import app, ConnectorRegistry, db, is_feature_enabled, security_manager
 from superset.models.helpers import AuditMixinNullable, ImportMixin
-from superset.models.slice import Slice as Slice
+from superset.models.slice import Slice
 from superset.models.tags import DashboardUpdater
 from superset.models.user_attributes import UserAttribute
 from superset.tasks.thumbnails import cache_dashboard_thumbnail
@@ -49,9 +52,9 @@ from superset.utils.dashboard_filter_scopes_converter import (
     convert_filter_scopes,
     copy_filter_scopes,
 )
+from superset.utils.urls import get_url_path
 
 if TYPE_CHECKING:
-    # pylint: disable=unused-import
     from superset.connectors.base.models import BaseDatasource
 
 metadata = Model.metadata  # pylint: disable=no-member
@@ -59,8 +62,9 @@ config = app.config
 logger = logging.getLogger(__name__)
 
 
-def copy_dashboard(mapper, connection, target):
-    # pylint: disable=unused-argument
+def copy_dashboard(
+    _mapper: Mapper, connection: Connection, target: "Dashboard"
+) -> None:
     dashboard_id = config["DASHBOARD_TEMPLATE_ID"]
     if dashboard_id is None:
         return
@@ -140,7 +144,7 @@ class Dashboard(  # pylint: disable=too-many-instance-attributes
         "slug",
     ]
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return self.dashboard_title or str(self.id)
 
     @property
@@ -150,6 +154,7 @@ class Dashboard(  # pylint: disable=too-many-instance-attributes
 
     @property
     def url(self) -> str:
+        url = f"/superset/dashboard/{self.slug or self.id}/"
         if self.json_metadata:
             # add default_filters to the preselect_filters of dashboard
             json_metadata = json.loads(self.json_metadata)
@@ -162,9 +167,14 @@ class Dashboard(  # pylint: disable=too-many-instance-attributes
                         return "/superset/dashboard/{}/?preselect_filters={}".format(
                             self.slug or self.id, filters
                         )
-                except Exception:  # pylint: disable=broad-except
-                    pass
-        return f"/superset/dashboard/{self.slug or self.id}/"
+                except (TypeError, JSONDecodeError) as exc:
+                    logger.error(
+                        "Unable to parse json for url: %r. Returning default url.",
+                        exc,
+                        exc_info=True,
+                    )
+                    return url
+        return url
 
     @property
     def datasources(self) -> Set[Optional["BaseDatasource"]]:
@@ -188,7 +198,7 @@ class Dashboard(  # pylint: disable=too-many-instance-attributes
     @property
     def digest(self) -> str:
         """
-            Returns a MD5 HEX digest that makes this dashboard unique
+        Returns a MD5 HEX digest that makes this dashboard unique
         """
         unique_string = f"{self.position_json}.{self.css}.{self.json_metadata}"
         return utils.md5_hex(unique_string)
@@ -196,19 +206,19 @@ class Dashboard(  # pylint: disable=too-many-instance-attributes
     @property
     def thumbnail_url(self) -> str:
         """
-            Returns a thumbnail URL with a HEX digest. We want to avoid browser cache
-            if the dashboard has changed
+        Returns a thumbnail URL with a HEX digest. We want to avoid browser cache
+        if the dashboard has changed
         """
         return f"/api/v1/dashboard/{self.id}/thumbnail/{self.digest}/"
 
     @property
-    def changed_by_name(self):
+    def changed_by_name(self) -> str:
         if not self.changed_by:
             return ""
         return str(self.changed_by)
 
     @property
-    def changed_by_url(self):
+    def changed_by_url(self) -> str:
         if not self.changed_by:
             return ""
         return f"/superset/profile/{self.changed_by.username}"
@@ -229,8 +239,8 @@ class Dashboard(  # pylint: disable=too-many-instance-attributes
             "position_json": positions,
         }
 
-    @property
-    def params(self) -> str:
+    @property  # type: ignore
+    def params(self) -> str:  # type: ignore
         return self.json_metadata
 
     @params.setter
@@ -238,27 +248,32 @@ class Dashboard(  # pylint: disable=too-many-instance-attributes
         self.json_metadata = value
 
     @property
-    def position(self) -> Dict:
+    def position(self) -> Dict[str, Any]:
         if self.position_json:
             return json.loads(self.position_json)
         return {}
 
     @classmethod
-    def import_obj(  # pylint: disable=too-many-locals,too-many-branches,too-many-statements
-        cls, dashboard_to_import: "Dashboard", import_time: Optional[int] = None
+    def import_obj(
+        # pylint: disable=too-many-locals,too-many-branches,too-many-statements
+        cls,
+        dashboard_to_import: "Dashboard",
+        import_time: Optional[int] = None,
     ) -> int:
         """Imports the dashboard from the object to the database.
 
-         Once dashboard is imported, json_metadata field is extended and stores
-         remote_id and import_time. It helps to decide if the dashboard has to
-         be overridden or just copies over. Slices that belong to this
-         dashboard will be wired to existing tables. This function can be used
-         to import/export dashboards between multiple superset instances.
-         Audit metadata isn't copied over.
+        Once dashboard is imported, json_metadata field is extended and stores
+        remote_id and import_time. It helps to decide if the dashboard has to
+        be overridden or just copies over. Slices that belong to this
+        dashboard will be wired to existing tables. This function can be used
+        to import/export dashboards between multiple superset instances.
+        Audit metadata isn't copied over.
         """
 
-        def alter_positions(dashboard, old_to_new_slc_id_dict):
-            """ Updates slice_ids in the position json.
+        def alter_positions(
+            dashboard: Dashboard, old_to_new_slc_id_dict: Dict[int, int]
+        ) -> None:
+            """Updates slice_ids in the position json.
 
             Sample position_json data:
             {
@@ -291,9 +306,9 @@ class Dashboard(  # pylint: disable=too-many-instance-attributes
                 if (
                     isinstance(value, dict)
                     and value.get("meta")
-                    and value.get("meta").get("chartId")
+                    and value.get("meta", {}).get("chartId")
                 ):
-                    old_slice_id = value.get("meta").get("chartId")
+                    old_slice_id = value["meta"]["chartId"]
 
                     if old_slice_id in old_to_new_slc_id_dict:
                         value["meta"]["chartId"] = old_to_new_slc_id_dict[old_slice_id]
@@ -307,11 +322,15 @@ class Dashboard(  # pylint: disable=too-many-instance-attributes
         # copy slices object as Slice.import_slice will mutate the slice
         # and will remove the existing dashboard - slice association
         slices = copy(dashboard_to_import.slices)
+
+        # Clearing the slug to avoid conflicts
+        dashboard_to_import.slug = None
+
         old_json_metadata = json.loads(dashboard_to_import.json_metadata or "{}")
         old_to_new_slc_id_dict: Dict[int, int] = {}
         new_timed_refresh_immune_slices = []
         new_expanded_slices = {}
-        new_filter_scopes: Dict[str, Dict] = {}
+        new_filter_scopes = {}
         i_params_dict = dashboard_to_import.params_dict
         remote_id_slice_map = {
             slc.params_dict["remote_id"]: slc
@@ -328,8 +347,8 @@ class Dashboard(  # pylint: disable=too-many-instance-attributes
             new_slc_id = Slice.import_obj(slc, remote_slc, import_time=import_time)
             old_to_new_slc_id_dict[slc.id] = new_slc_id
             # update json metadata that deals with slice ids
-            new_slc_id_str = "{}".format(new_slc_id)
-            old_slc_id_str = "{}".format(slc.id)
+            new_slc_id_str = str(new_slc_id)
+            old_slc_id_str = str(slc.id)
             if (
                 "timed_refresh_immune_slices" in i_params_dict
                 and old_slc_id_str in i_params_dict["timed_refresh_immune_slices"]
@@ -347,7 +366,7 @@ class Dashboard(  # pylint: disable=too-many-instance-attributes
         # are converted to filter_scopes
         # but dashboard create from import may still have old dashboard filter metadata
         # here we convert them to new filter_scopes metadata first
-        filter_scopes: Dict = {}
+        filter_scopes = {}
         if (
             "filter_immune_slices" in i_params_dict
             or "filter_immune_slice_fields" in i_params_dict
@@ -411,7 +430,7 @@ class Dashboard(  # pylint: disable=too-many-instance-attributes
 
     @classmethod
     def export_dashboards(  # pylint: disable=too-many-locals
-        cls, dashboard_ids: List
+        cls, dashboard_ids: List[int]
     ) -> str:
         copied_dashboards = []
         datasource_ids = set()
@@ -469,10 +488,11 @@ class Dashboard(  # pylint: disable=too-many-instance-attributes
         )
 
 
-def event_after_dashboard_changed(  # pylint: disable=unused-argument
-    mapper, connection, target
-):
-    cache_dashboard_thumbnail.delay(target.id, force=True)
+def event_after_dashboard_changed(
+    _mapper: Mapper, _connection: Connection, target: Dashboard
+) -> None:
+    url = get_url_path("Superset.dashboard", dashboard_id_or_slug=target.id)
+    cache_dashboard_thumbnail.delay(url, target.digest, force=True)
 
 
 # events for updating tags

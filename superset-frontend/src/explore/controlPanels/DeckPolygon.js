@@ -16,7 +16,7 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-import { t } from '@superset-ui/translation';
+import { t } from '@superset-ui/core';
 import timeGrainSqlaAnimationOverrides from './timeGrainSqlaAnimationOverrides';
 import { formatSelectOptions } from '../../modules/utils';
 import {
@@ -40,10 +40,10 @@ import {
   lineWidth,
   lineType,
   reverseLongLat,
+  mapboxStyle,
 } from './Shared_DeckGL';
 
 export default {
-  requiresTime: true,
   controlPanelSections: [
     {
       label: t('Query'),
@@ -63,7 +63,7 @@ export default {
       label: t('Map'),
       expanded: true,
       controlSetRows: [
-        ['mapbox_style', viewport],
+        [mapboxStyle, viewport],
         [autozoom, null],
       ],
     },
@@ -121,7 +121,16 @@ export default {
           },
         ],
         [
-          'table_filter',
+          {
+            name: 'table_filter',
+            config: {
+              type: 'CheckboxControl',
+              label: t('Emit Filter Events'),
+              renderTrigger: true,
+              default: false,
+              description: t('Whether to apply filter when items are clicked'),
+            },
+          },
           {
             name: 'toggle_polygons',
             config: {

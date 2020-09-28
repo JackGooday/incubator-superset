@@ -16,8 +16,7 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-import { t } from '@superset-ui/translation';
-import { validateNonEmpty } from '@superset-ui/validator';
+import { t, validateNonEmpty } from '@superset-ui/core';
 import {
   filterNulls,
   autozoom,
@@ -29,10 +28,10 @@ import {
   gridSize,
   viewport,
   spatial,
+  mapboxStyle,
 } from './Shared_DeckGL';
 
 export default {
-  requiresTime: true,
   controlPanelSections: [
     {
       label: t('Query'),
@@ -46,7 +45,7 @@ export default {
     {
       label: t('Map'),
       controlSetRows: [
-        ['mapbox_style', viewport],
+        [mapboxStyle, viewport],
         ['color_picker', autozoom],
         [gridSize, extruded],
       ],

@@ -18,9 +18,9 @@
  */
 import React from 'react';
 import PropTypes from 'prop-types';
-import Select from 'react-select';
-import { t } from '@superset-ui/translation';
-import { SupersetClient } from '@superset-ui/connection';
+// TODO: refactor this with `import { AsyncSelect } from src/components/Select`
+import { Select } from 'src/components/Select';
+import { t, SupersetClient } from '@superset-ui/core';
 import getClientErrorObject from '../utils/getClientErrorObject';
 
 const propTypes = {
