@@ -25,6 +25,7 @@ import prison
 import humanize
 from sqlalchemy.sql import func
 
+from superset.utils.core import get_example_database
 from tests.test_app import app
 from superset.connectors.connector_registry import ConnectorRegistry
 from superset.extensions import db, security_manager
@@ -767,7 +768,7 @@ class TestChartApi(SupersetTestCase, ApiOwnersTestCaseMixin):
         self.login(username="admin")
         table = self.get_table_by_name("birth_names")
         request_payload = get_query_context(table.name, table.id, table.type)
-        request_payload["result_type"] = "query"
+        request_payload["result_type"] = utils.ChartDataResultType.QUERY
         rv = self.post_assert_metric(CHART_DATA_URI, request_payload, "data")
         self.assertEqual(rv.status_code, 200)
 
@@ -869,3 +870,23 @@ class TestChartApi(SupersetTestCase, ApiOwnersTestCaseMixin):
         self.assertEqual(rv.status_code, 200)
         data = json.loads(rv.data.decode("utf-8"))
         self.assertEqual(data["count"], 6)
+
+    def test_chart_data_jinja_filter_request(self):
+        """
+        Chart data API: Ensure request referencing filters via jinja renders a correct query
+        """
+        self.login(username="admin")
+        table = self.get_table_by_name("birth_names")
+        request_payload = get_query_context(table.name, table.id, table.type)
+        request_payload["result_type"] = utils.ChartDataResultType.QUERY
+        request_payload["queries"][0]["filters"] = [
+            {"col": "gender", "op": "==", "val": "boy"}
+        ]
+        request_payload["queries"][0]["extras"][
+            "where"
+        ] = "('boy' = '{{ filter_values('gender', 'xyz' )[0] }}')"
+        rv = self.post_assert_metric(CHART_DATA_URI, request_payload, "data")
+        response_payload = json.loads(rv.data.decode("utf-8"))
+        result = response_payload["result"][0]["query"]
+        if get_example_database().backend != "presto":
+            assert "('boy' = 'boy')" in result

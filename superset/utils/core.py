@@ -42,6 +42,7 @@ from types import TracebackType
 from typing import (
     Any,
     Callable,
+    cast,
     Dict,
     Iterable,
     Iterator,
@@ -101,7 +102,6 @@ logging.getLogger("MARKDOWN").setLevel(logging.INFO)
 logger = logging.getLogger(__name__)
 
 DTTM_ALIAS = "__timestamp"
-ADHOC_METRIC_EXPRESSION_TYPES = {"SIMPLE": "SIMPLE", "SQL": "SQL"}
 
 JS_MAX_INTEGER = 9007199254740991  # Largest int Java Script can handle 2^53-1
 
@@ -1010,21 +1010,7 @@ def get_example_database() -> "Database":
 
 
 def is_adhoc_metric(metric: Metric) -> bool:
-    return bool(
-        isinstance(metric, dict)
-        and (
-            (
-                metric["expressionType"] == ADHOC_METRIC_EXPRESSION_TYPES["SIMPLE"]
-                and metric["column"]
-                and metric["aggregate"]
-            )
-            or (
-                metric["expressionType"] == ADHOC_METRIC_EXPRESSION_TYPES["SQL"]
-                and metric["sqlExpression"]
-            )
-        )
-        and metric["label"]
-    )
+    return isinstance(metric, dict)
 
 
 def get_metric_name(metric: Metric) -> str:
@@ -1360,6 +1346,47 @@ def get_iterable(x: Any) -> List[Any]:
     return x if isinstance(x, list) else [x]
 
 
+def get_form_data_token(form_data: Dict[str, Any]) -> str:
+    """
+    Return the token contained within form data or generate a new one.
+
+    :param form_data: chart form data
+    :return: original token if predefined, otherwise new uuid4 based token
+    """
+    return form_data.get("token") or "token_" + uuid.uuid4().hex[:8]
+
+
+def get_column_name_from_metric(metric: Metric) -> Optional[str]:
+    """
+    Extract the column that a metric is referencing. If the metric isn't
+    a simple metric, always returns `None`.
+
+    :param metric: Ad-hoc metric
+    :return: column name if simple metric, otherwise None
+    """
+    if is_adhoc_metric(metric):
+        metric = cast(Dict[str, Any], metric)
+        if metric["expressionType"] == AdhocMetricExpressionType.SIMPLE:
+            return cast(Dict[str, Any], metric["column"])["column_name"]
+    return None
+
+
+def get_column_names_from_metrics(metrics: List[Metric]) -> List[str]:
+    """
+    Extract the columns that a list of metrics are referencing. Expcludes all
+    SQL metrics.
+
+    :param metrics: Ad-hoc metric
+    :return: column name if simple metric, otherwise None
+    """
+    columns: List[str] = []
+    for metric in metrics:
+        column_name = get_column_name_from_metric(metric)
+        if column_name:
+            columns.append(column_name)
+    return columns
+
+
 class LenientEnum(Enum):
     """Enums that do not raise ValueError when value is invalid"""
 
@@ -1485,3 +1512,8 @@ class PostProcessingContributionOrientation(str, Enum):
 
     ROW = "row"
     COLUMN = "column"
+
+
+class AdhocMetricExpressionType(str, Enum):
+    SIMPLE = "SIMPLE"
+    SQL = "SQL"

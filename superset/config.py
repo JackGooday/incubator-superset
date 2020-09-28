@@ -335,6 +335,12 @@ GET_FEATURE_FLAGS_FUNC: Optional[Callable[[Dict[str, bool]], Dict[str, bool]]] =
 THUMBNAIL_SELENIUM_USER = "Admin"
 THUMBNAIL_CACHE_CONFIG: CacheConfig = {"CACHE_TYPE": "null"}
 
+# Used for thumbnails and other api: Time in seconds before selenium
+# times out after trying to locate an element on the page and wait
+# for that element to load for an alert screenshot.
+SCREENSHOT_LOCATE_WAIT = 10
+SCREENSHOT_LOAD_WAIT = 60
+
 # ---------------------------------------------------
 # Image and file configuration
 # ---------------------------------------------------
@@ -840,6 +846,16 @@ TALISMAN_CONFIG = {
 # a custom security config could potentially give access to setting filters on
 # tables that users do not have access to.
 ENABLE_ROW_LEVEL_SECURITY = False
+# It is possible to customize which tables and roles are featured in the RLS
+# dropdown. When set, this dict is assigned to `add_form_query_rel_fields` and
+# `edit_form_query_rel_fields` on `RowLevelSecurityFiltersModelView`. Example:
+#
+# from flask_appbuilder.models.sqla import filters
+# RLS_FORM_QUERY_REL_FIELDS = {
+#     "roles": [["name", filters.FilterStartsWith, "RlsRole"]]
+#     "tables": [["table_name", filters.FilterContains, "rls"]]
+# }
+RLS_FORM_QUERY_REL_FIELDS: Optional[Dict[str, List[List[Any]]]] = None
 
 #
 # Flask session cookie options
