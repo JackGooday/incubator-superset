@@ -62,11 +62,20 @@ SQLALCHEMY_DATABASE_URI = "%s://%s:%s@%s:%s/%s" % (
     DATABASE_DB,
 )
 
+# Enable javascript controls for Deck GL tooltips
+# This is disabled for security reasons by default,
+# but I'm sure its fine to turn on...
+ENABLE_JAVASCRIPT_CONTROLS = True
+
+# If you want to embed charts as iframes you need to
+# disable the following setting. I've left this out
+# because you need to login to the iframe anyway
+#SESSION_COOKIE_SAMESITE = None
+
 REDIS_HOST = get_env_variable("REDIS_HOST")
 REDIS_PORT = get_env_variable("REDIS_PORT")
 REDIS_CELERY_DB = get_env_variable("REDIS_CELERY_DB", 0)
 REDIS_RESULTS_DB = get_env_variable("REDIS_CELERY_DB", 1)
-
 
 #RESULTS_BACKEND = FileSystemCache("/app/superset_home/sqllab")
 # Use a Redis cache instead of the default file system one
