@@ -70,7 +70,12 @@ ENABLE_JAVASCRIPT_CONTROLS = True
 # If you want to embed charts as iframes you need to
 # disable the following setting. I've left this out
 # because you need to login to the iframe anyway
-#SESSION_COOKIE_SAMESITE = None
+SESSION_COOKIE_SAMESITE = None
+
+# Enable the next line if you want to overwrite the
+# Public role with all of the permissions of the
+# Gamma role
+#PUBLIC_ROLE_LIKE_GAMMA = True
 
 REDIS_HOST = get_env_variable("REDIS_HOST")
 REDIS_PORT = get_env_variable("REDIS_PORT")
