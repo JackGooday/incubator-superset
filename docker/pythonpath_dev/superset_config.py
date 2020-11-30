@@ -25,7 +25,8 @@
 import logging
 import os
 
-from cachelib.file import FileSystemCache
+#from cachelib.file import FileSystemCache
+from cachelib.redis import RedisCache
 
 logger = logging.getLogger()
 
@@ -61,13 +62,35 @@ SQLALCHEMY_DATABASE_URI = "%s://%s:%s@%s:%s/%s" % (
     DATABASE_DB,
 )
 
+# Enable javascript controls for Deck GL tooltips
+# This is disabled for security reasons by default,
+# but I'm sure its fine to turn on...
+ENABLE_JAVASCRIPT_CONTROLS = True
+
+# If you want to embed charts as iframes you need to
+# disable the following setting. I've left this out
+# because you need to login to the iframe anyway
+#SESSION_COOKIE_SAMESITE = None
+
+# The following line fixes the issue when you try to
+# change a datasource for a chart and get 'An error
+# occurred' message (308 redirect message)
+# Solution found in this thread:
+# https://github.com/apache/incubator-superset/issues/8686
+ENABLE_PROXY_FIX = True
+
 REDIS_HOST = get_env_variable("REDIS_HOST")
 REDIS_PORT = get_env_variable("REDIS_PORT")
 REDIS_CELERY_DB = get_env_variable("REDIS_CELERY_DB", 0)
 REDIS_RESULTS_DB = get_env_variable("REDIS_CELERY_DB", 1)
 
-
-RESULTS_BACKEND = FileSystemCache("/app/superset_home/sqllab")
+#RESULTS_BACKEND = FileSystemCache("/app/superset_home/sqllab")
+# Use a Redis cache instead of the default file system one
+# Make sure to use *the name of the Redis service in
+# docker-compose.yml* as host, which is 'redis' (NOT 'localhost' as in
+# the examples, which you would use if not running in Docker)
+RESULTS_BACKEND = RedisCache(
+    host='redis', port=6379, key_prefix='superset_results')
 
 
 class CeleryConfig(object):
