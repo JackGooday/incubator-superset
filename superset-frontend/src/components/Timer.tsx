@@ -30,8 +30,8 @@ interface TimerProps {
 }
 
 const TimerLabel = styled(Label)`
-  width: 80px;
-  text-align: right;
+  width: 96px;
+  text-align: center;
 `;
 
 export default function Timer({
@@ -40,8 +40,8 @@ export default function Timer({
   startTime,
   status = 'success',
 }: TimerProps) {
-  const [clockStr, setClockStr] = useState('');
-  const timer = useRef<NodeJS.Timeout>();
+  const [clockStr, setClockStr] = useState('00:00:00.00');
+  const timer = useRef<ReturnType<typeof setInterval>>();
 
   useEffect(() => {
     const stopTimer = () => {
@@ -67,5 +67,9 @@ export default function Timer({
     return stopTimer;
   }, [endTime, isRunning, startTime]);
 
-  return <TimerLabel bsStyle={status}>{clockStr}</TimerLabel>;
+  return (
+    <TimerLabel bsStyle={status} role="timer">
+      {clockStr}
+    </TimerLabel>
+  );
 }

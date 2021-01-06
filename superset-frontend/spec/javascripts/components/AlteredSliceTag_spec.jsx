@@ -17,14 +17,14 @@
  * under the License.
  */
 import React from 'react';
-import { shallow } from 'enzyme';
+import { styledMount as mount } from 'spec/helpers/theming';
 import { getChartControlPanelRegistry } from '@superset-ui/core';
 
 import AlteredSliceTag from 'src/components/AlteredSliceTag';
 import ModalTrigger from 'src/components/ModalTrigger';
 import TooltipWrapper from 'src/components/TooltipWrapper';
-import ListView from 'src/components/ListView';
-import TableCollection from 'src/components/ListView/TableCollection';
+import TableCollection from 'src/components/dataViewCommon/TableCollection';
+import TableView from 'src/components/TableView';
 
 import {
   defaultProps,
@@ -34,7 +34,7 @@ import {
 } from './fixtures/AlteredSliceTag';
 
 const getTableWrapperFromModalBody = modalBody =>
-  modalBody.find(ListView).shallow().find(TableCollection).shallow();
+  modalBody.find(TableView).find(TableCollection);
 
 describe('AlteredSliceTag', () => {
   let wrapper;
@@ -47,7 +47,7 @@ describe('AlteredSliceTag', () => {
       fakePluginControls,
     );
     props = { ...defaultProps };
-    wrapper = shallow(<AlteredSliceTag {...props} />);
+    wrapper = mount(<AlteredSliceTag {...props} />);
     ({ controlsMap } = wrapper.instance().state);
   });
 
@@ -63,7 +63,7 @@ describe('AlteredSliceTag', () => {
       origFormData: props.origFormData,
       currentFormData: props.origFormData,
     };
-    wrapper = shallow(<AlteredSliceTag {...props} />);
+    wrapper = mount(<AlteredSliceTag {...props} />);
     expect(wrapper.instance().state.rows).toEqual([]);
     expect(wrapper.instance().state.hasDiffs).toBe(false);
     expect(wrapper.instance().render()).toBeNull();
@@ -78,7 +78,7 @@ describe('AlteredSliceTag', () => {
       currentFormData: { ...props.currentFormData },
       origFormData: { ...props.origFormData },
     };
-    wrapper = shallow(<AlteredSliceTag {...props} />);
+    wrapper = mount(<AlteredSliceTag {...props} />);
     const wrapperInstance = wrapper.instance();
     wrapperInstance.UNSAFE_componentWillReceiveProps(newProps);
     expect(getRowsFromDiffsStub).toHaveBeenCalled();
@@ -98,7 +98,7 @@ describe('AlteredSliceTag', () => {
 
   describe('renderTriggerNode', () => {
     it('renders a TooltipWrapper', () => {
-      const triggerNode = shallow(
+      const triggerNode = mount(
         <div>{wrapper.instance().renderTriggerNode()}</div>,
       );
       expect(triggerNode.find(TooltipWrapper)).toHaveLength(1);
@@ -107,14 +107,14 @@ describe('AlteredSliceTag', () => {
 
   describe('renderModalBody', () => {
     it('renders a Table', () => {
-      const modalBody = shallow(
+      const modalBody = mount(
         <div>{wrapper.instance().renderModalBody()}</div>,
       );
-      expect(modalBody.find(ListView)).toHaveLength(1);
+      expect(modalBody.find(TableView)).toHaveLength(1);
     });
 
     it('renders a thead', () => {
-      const modalBody = shallow(
+      const modalBody = mount(
         <div>{wrapper.instance().renderModalBody()}</div>,
       );
       expect(
@@ -123,7 +123,7 @@ describe('AlteredSliceTag', () => {
     });
 
     it('renders th', () => {
-      const modalBody = shallow(
+      const modalBody = mount(
         <div>{wrapper.instance().renderModalBody()}</div>,
       );
       const th = getTableWrapperFromModalBody(modalBody).find('th');
@@ -134,7 +134,7 @@ describe('AlteredSliceTag', () => {
     });
 
     it('renders the correct number of Tr', () => {
-      const modalBody = shallow(
+      const modalBody = mount(
         <div>{wrapper.instance().renderModalBody()}</div>,
       );
       const tr = getTableWrapperFromModalBody(modalBody).find('tr');
@@ -142,7 +142,7 @@ describe('AlteredSliceTag', () => {
     });
 
     it('renders the correct number of td', () => {
-      const modalBody = shallow(
+      const modalBody = mount(
         <div>{wrapper.instance().renderModalBody()}</div>,
       );
       const td = getTableWrapperFromModalBody(modalBody).find('td');
@@ -155,12 +155,12 @@ describe('AlteredSliceTag', () => {
 
   describe('renderRows', () => {
     it('returns an array of rows with one tr and three td', () => {
-      const modalBody = shallow(
+      const modalBody = mount(
         <div>{wrapper.instance().renderModalBody()}</div>,
       );
       const rows = getTableWrapperFromModalBody(modalBody).find('tr');
       expect(rows).toHaveLength(8);
-      const fakeRow = shallow(<div>{rows.get(1)}</div>);
+      const fakeRow = mount(<div>{rows.get(1)}</div>);
       expect(fakeRow.find('tr')).toHaveLength(1);
       expect(fakeRow.find('td')).toHaveLength(3);
     });
@@ -241,18 +241,18 @@ describe('AlteredSliceTag', () => {
           clause: 'WHERE',
           comparator: ['1', 'g', '7', 'ho'],
           expressionType: 'SIMPLE',
-          operator: 'in',
+          operator: 'IN',
           subject: 'a',
         },
         {
           clause: 'WHERE',
           comparator: ['hu', 'ho', 'ha'],
           expressionType: 'SIMPLE',
-          operator: 'not in',
+          operator: 'NOT IN',
           subject: 'b',
         },
       ];
-      const expected = 'a in [1, g, 7, ho], b not in [hu, ho, ha]';
+      const expected = 'a IN [1, g, 7, ho], b NOT IN [hu, ho, ha]';
       expect(
         wrapper.instance().formatValue(filters, 'adhoc_filters', controlsMap),
       ).toBe(expected);

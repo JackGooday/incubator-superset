@@ -30,10 +30,10 @@ from flask_babel import gettext as __, lazy_gettext as _
 from wtforms.ext.sqlalchemy.fields import QuerySelectField
 from wtforms.validators import Regexp
 
-from superset import app, db
+from superset import app, db, is_feature_enabled
 from superset.connectors.base.views import DatasourceModelView
 from superset.connectors.sqla import models
-from superset.constants import RouteMethod
+from superset.constants import MODEL_VIEW_RW_METHOD_PERMISSION_MAP, RouteMethod
 from superset.typing import FlaskResponse
 from superset.utils import core as utils
 from superset.views.base import (
@@ -55,6 +55,8 @@ class TableColumnInlineView(  # pylint: disable=too-many-ancestors
 ):
     datamodel = SQLAInterface(models.TableColumn)
     # TODO TODO, review need for this on related_views
+    class_permission_name = "Dataset"
+    method_permission_name = MODEL_VIEW_RW_METHOD_PERMISSION_MAP
     include_route_methods = RouteMethod.RELATED_VIEW_SET | RouteMethod.API_SET
 
     list_title = _("Columns")
@@ -174,6 +176,8 @@ class SqlMetricInlineView(  # pylint: disable=too-many-ancestors
     CompactCRUDMixin, SupersetModelView
 ):
     datamodel = SQLAInterface(models.SqlMetric)
+    class_permission_name = "Dataset"
+    method_permission_name = MODEL_VIEW_RW_METHOD_PERMISSION_MAP
     include_route_methods = RouteMethod.RELATED_VIEW_SET | RouteMethod.API_SET
 
     list_title = _("Metrics")
@@ -210,7 +214,7 @@ class SqlMetricInlineView(  # pylint: disable=too-many-ancestors
         "extra": utils.markdown(
             "Extra data to specify metric metadata. Currently supports "
             'certification data of the format: `{ "certification": "certified_by": '
-            '"Taylor Swift", "details": "This metric is the source of truth." '
+            '"Data Platform Team", "details": "This metric is the source of truth." '
             "} }`. This should be modified from the edit datasource model in "
             "Explore to ensure correct formatting.",
             True,
@@ -327,6 +331,8 @@ class TableModelView(  # pylint: disable=too-many-ancestors
     DatasourceModelView, DeleteMixin, YamlExportMixin
 ):
     datamodel = SQLAInterface(models.SqlaTable)
+    class_permission_name = "Dataset"
+    method_permission_name = MODEL_VIEW_RW_METHOD_PERMISSION_MAP
     include_route_methods = RouteMethod.CRUD_SET
 
     list_title = _("Tables")
@@ -352,13 +358,13 @@ class TableModelView(  # pylint: disable=too-many-ancestors
         "cache_timeout",
         "is_sqllab_view",
         "template_params",
+        "extra",
     ]
     base_filters = [["id", DatasourceFilter, lambda: []]]
     show_columns = edit_columns + ["perm", "slices"]
     related_views = [
         TableColumnInlineView,
         SqlMetricInlineView,
-        RowLevelSecurityFiltersModelView,
     ]
     base_order = ("changed_on", "desc")
     search_columns = ("database", "schema", "table_name", "owners", "is_sqllab_view")
@@ -412,6 +418,13 @@ class TableModelView(  # pylint: disable=too-many-ancestors
             "A timeout of 0 indicates that the cache never expires. "
             "Note this defaults to the database timeout if undefined."
         ),
+        "extra": utils.markdown(
+            "Extra data to specify table metadata. Currently supports "
+            'certification data of the format: `{ "certification": { "certified_by": '
+            '"Data Platform Team", "details": "This table is the source of truth." '
+            "} }`.",
+            True,
+        ),
     }
     label_columns = {
         "slices": _("Associated Charts"),
@@ -432,6 +445,7 @@ class TableModelView(  # pylint: disable=too-many-ancestors
         "description": _("Description"),
         "is_sqllab_view": _("SQL Lab View"),
         "template_params": _("Template parameters"),
+        "extra": _("Extra"),
         "modified": _("Modified"),
     }
     edit_form_extra_fields = {
@@ -446,9 +460,13 @@ class TableModelView(  # pylint: disable=too-many-ancestors
         validate_sqlatable(item)
 
     def post_add(  # pylint: disable=arguments-differ
-        self, item: "TableModelView", flash_message: bool = True
+        self,
+        item: "TableModelView",
+        flash_message: bool = True,
+        fetch_metadata: bool = True,
     ) -> None:
-        item.fetch_metadata()
+        if fetch_metadata:
+            item.fetch_metadata()
         create_table_permissions(item)
         if flash_message:
             flash(
@@ -462,16 +480,16 @@ class TableModelView(  # pylint: disable=too-many-ancestors
             )
 
     def post_update(self, item: "TableModelView") -> None:
-        self.post_add(item, flash_message=False)
+        self.post_add(item, flash_message=False, fetch_metadata=False)
 
     def _delete(self, pk: int) -> None:
         DeleteMixin._delete(self, pk)
 
     @expose("/edit/<pk>", methods=["GET", "POST"])
     @has_access
-    def edit(self, pk: int) -> FlaskResponse:
+    def edit(self, pk: str) -> FlaskResponse:
         """Simple hack to redirect to explore view after saving"""
-        resp = super(TableModelView, self).edit(pk)
+        resp = super().edit(pk)
         if isinstance(resp, str):
             return resp
         return redirect("/superset/explore/table/{}/".format(pk))
@@ -559,7 +577,7 @@ class TableModelView(  # pylint: disable=too-many-ancestors
     @expose("/list/")
     @has_access
     def list(self) -> FlaskResponse:
-        if not app.config["ENABLE_REACT_CRUD_VIEWS"]:
+        if not is_feature_enabled("ENABLE_REACT_CRUD_VIEWS"):
             return super().list()
 
         return super().render_app_template()

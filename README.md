@@ -16,12 +16,13 @@ KIND, either express or implied.  See the License for the
 specific language governing permissions and limitations
 under the License.
 -->
+
 Superset
 =========
 
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 ![GitHub release (latest SemVer)](https://img.shields.io/github/v/release/apache/incubator-superset)
-[![Build Status](https://travis-ci.org/apache/incubator-superset.svg?branch=master)](https://travis-ci.org/apache/incubator-superset)
+[![Build Status](https://github.com/apache/incubator-superset/workflows/Python/badge.svg)](https://github.com/apache/incubator-superset/actions)
 [![PyPI version](https://badge.fury.io/py/apache-superset.svg)](https://badge.fury.io/py/apache-superset)
 [![Coverage Status](https://codecov.io/github/apache/incubator-superset/coverage.svg?branch=master)](https://codecov.io/github/apache/incubator-superset)
 [![PyPI](https://img.shields.io/pypi/pyversions/apache-superset.svg?maxAge=2592000)](https://pypi.python.org/pypi/apache-superset)
@@ -72,15 +73,16 @@ A modern, enterprise-ready business intelligence web application.
 
 <kbd><img title="Visualizations" src="https://raw.githubusercontent.com/apache/incubator-superset/master/superset-frontend/images/screenshots/visualizations.png"></kbd><br/>
 
+
 ## Why Superset
 
 Superset provides:
 * An intuitive interface to explore and visualize datasets, and
-    create interactive dashboards.
+    create interactive dashboards
 * A wide array of beautiful visualizations to showcase your data.
 * Easy, code-free, user flows to drill down and slice and dice the data
     underlying exposed dashboards. The dashboards and charts act as a starting
-    point for deeper analysis.
+    point for deeper analysis
 * A state of the art SQL editor/IDE exposing a rich metadata browser, and
     an easy workflow to create visualizations out of any result set.
 * An extensible, high granularity security model allowing intricate rules
@@ -131,7 +133,6 @@ A complete list of supported databases can be found
 
 [See in the documentation](https://superset.incubator.apache.org/docs/installation/installing-superset-using-docker-compose)
 
-
 ## Get Involved
 
 * Ask and answer questions on [StackOverflow](https://stackoverflow.com/questions/tagged/apache-superset)
@@ -150,14 +151,16 @@ how to set up a development environment.
 
 ## Resources
 
-* Superset 101 -- Getting Started Guide (From [Preset](https://preset.io) [Blog](https://preset.io/blog/))
+* Superset 101 -- Getting Started Guide (From [Preset Blog](https://preset.io/blog/))
   * [Installing Apache Superset Locally](https://preset.io/blog/2020-05-11-getting-started-installing-superset/)
   * [Installing Database Drivers](https://preset.io/blog/2020-05-18-install-db-drivers/)
   * [Connect Superset To Google Sheets](https://preset.io/blog/2020-06-01-connect-superset-google-sheets/)
   * [Create Your First Chart](https://preset.io/blog/2020-06-08-first-chart/)
   * [Create Time Series Charts](https://preset.io/blog/2020-06-26-timeseries-chart/)
-* [Docker image](https://hub.docker.com/r/preset/superset/)
+* [Docker image](https://hub.docker.com/r/apache/incubator-superset)
 * [Youtube Channel](https://www.youtube.com/channel/UCMuwrvBsg_jjI2gLcm04R0g)
   * [May 2020: Virtual Meetup Recording. Topics: 0.36 Overview, Committers Self-Intro, Roadmap](https://www.youtube.com/watch?v=tXGDmqjmcTs&t=20s)
   * [July 2020: Virtual Meetup Recording. Topics: Visualization Plugins, 0.37 Preview, Demo](https://www.youtube.com/watch?v=f6up5x_iRbI)
-* [So, You Want to Build a Superset Viz Plugin...](https://preset.io/blog/2020-07-02-hello-world/)
+  * [November 2020: Superset 1.0](https://www.youtube.com/watch?v=GwtWRUSEjk4)
+* [Building Custom Viz Plugins](https://superset.apache.org/docs/installation/building-custom-viz-plugins)
+* [Superset API](https://superset.apache.org/docs/rest-api)

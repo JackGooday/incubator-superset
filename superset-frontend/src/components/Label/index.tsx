@@ -33,11 +33,17 @@ export interface LabelProps {
   bsStyle?: string;
   style?: CSSProperties;
   children?: React.ReactNode;
+  role?: string;
 }
 
 const SupersetLabel = styled(BootstrapLabel)`
   /* un-bunch them! */
   margin-right: ${({ theme }) => theme.gridUnit}px;
+  max-width: 100%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: middle;
 
   &:first-of-type {
     margin-left: 0;

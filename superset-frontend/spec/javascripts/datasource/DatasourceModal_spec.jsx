@@ -18,18 +18,20 @@
  */
 import React from 'react';
 import { act } from 'react-dom/test-utils';
-import { Modal } from 'react-bootstrap';
 import configureStore from 'redux-mock-store';
 import { mount } from 'enzyme';
+import { Provider } from 'react-redux';
 import fetchMock from 'fetch-mock';
 import thunk from 'redux-thunk';
 import sinon from 'sinon';
 import { supersetTheme, ThemeProvider } from '@superset-ui/core';
 
 import waitForComponentToPaint from 'spec/helpers/waitForComponentToPaint';
+import Modal from 'src/common/components/Modal';
 import DatasourceModal from 'src/datasource/DatasourceModal';
 import DatasourceEditor from 'src/datasource/DatasourceEditor';
-import mockDatasource from '../../fixtures/mockDatasource';
+import * as featureFlags from 'src/featureFlags';
+import mockDatasource from 'spec/fixtures/mockDatasource';
 
 const mockStore = configureStore([thunk]);
 const store = mockStore({});
@@ -49,11 +51,15 @@ const mockedProps = {
 };
 
 async function mountAndWait(props = mockedProps) {
-  const mounted = mount(<DatasourceModal {...props} />, {
-    context: { store },
-    wrappingComponent: ThemeProvider,
-    wrappingComponentProps: { theme: supersetTheme },
-  });
+  const mounted = mount(
+    <Provider store={store}>
+      <DatasourceModal {...props} />
+    </Provider>,
+    {
+      wrappingComponent: ThemeProvider,
+      wrappingComponentProps: { theme: supersetTheme },
+    },
+  );
   await waitForComponentToPaint(mounted);
 
   return mounted;
@@ -61,10 +67,17 @@ async function mountAndWait(props = mockedProps) {
 
 describe('DatasourceModal', () => {
   let wrapper;
-
+  let isFeatureEnabledMock;
   beforeEach(async () => {
+    isFeatureEnabledMock = jest
+      .spyOn(featureFlags, 'isFeatureEnabled')
+      .mockReturnValue(true);
     fetchMock.reset();
     wrapper = await mountAndWait();
+  });
+
+  afterAll(() => {
+    isFeatureEnabledMock.restore();
   });
 
   it('renders', () => {
@@ -72,7 +85,7 @@ describe('DatasourceModal', () => {
   });
 
   it('renders a Modal', () => {
-    expect(wrapper.find(Modal)).toHaveLength(2);
+    expect(wrapper.find(Modal)).toExist();
   });
 
   it('renders a DatasourceEditor', () => {
@@ -89,7 +102,9 @@ describe('DatasourceModal', () => {
     });
     await waitForComponentToPaint(wrapper);
     act(() => {
-      const okButton = wrapper.find('[className="btn btn-sm btn-primary"]');
+      const okButton = wrapper.find(
+        '.ant-modal-confirm .ant-modal-confirm-btns .ant-btn-primary',
+      );
       okButton.simulate('click');
     });
     await waitForComponentToPaint(wrapper);
@@ -97,5 +112,36 @@ describe('DatasourceModal', () => {
     expect(callsP._calls.map(call => call[0])).toEqual(
       expected,
     ); /* eslint no-underscore-dangle: 0 */
+  });
+
+  it('renders a legacy data source btn', () => {
+    expect(
+      wrapper.find('button[data-test="datasource-modal-legacy-edit"]'),
+    ).toExist();
+  });
+});
+
+describe('DatasourceModal without legacy data btn', () => {
+  let wrapper;
+  let isFeatureEnabledMock;
+  beforeEach(async () => {
+    isFeatureEnabledMock = jest
+      .spyOn(featureFlags, 'isFeatureEnabled')
+      .mockReturnValue(false);
+    fetchMock.reset();
+    wrapper = await mountAndWait();
+  });
+
+  afterAll(() => {
+    isFeatureEnabledMock.restore();
+  });
+
+  it('hides legacy data source btn', () => {
+    isFeatureEnabledMock = jest
+      .spyOn(featureFlags, 'isFeatureEnabled')
+      .mockReturnValue(false);
+    expect(
+      wrapper.find('button[data-test="datasource-modal-legacy-edit"]'),
+    ).not.toExist();
   });
 });

@@ -17,12 +17,17 @@
 from typing import Any, Dict
 
 from flask_babel import gettext as _
-from marshmallow import fields, post_load, Schema, validate
+from marshmallow import EXCLUDE, fields, post_load, Schema, validate
 from marshmallow.validate import Length, Range
 
 from superset.common.query_context import QueryContext
 from superset.utils import schema as utils
-from superset.utils.core import FilterOperator
+from superset.utils.core import (
+    AnnotationType,
+    FilterOperator,
+    PostProcessingBoxplotWhiskerType,
+    PostProcessingContributionOrientation,
+)
 
 #
 # RISON/JSON schemas for query parameters
@@ -45,6 +50,9 @@ screenshot_query_schema = {
         "thumb_size": width_height_schema,
     },
 }
+get_export_ids_schema = {"type": "array", "items": {"type": "integer"}}
+
+get_fav_star_ids_schema = {"type": "array", "items": {"type": "integer"}}
 
 #
 # Column schema descriptions
@@ -336,6 +344,7 @@ class ChartDataRollingOptionsSchema(ChartDataPostProcessingOperationOptionsSchem
                 "nanmax",
                 "nanmean",
                 "nanmedian",
+                "nanpercentile",
                 "min",
                 "percentile",
                 "prod",
@@ -441,7 +450,9 @@ class ChartDataContributionOptionsSchema(ChartDataPostProcessingOperationOptions
     orientation = fields.String(
         description="Should cell values be calculated across the row or column.",
         required=True,
-        validate=validate.OneOf(choices=("row", "column",)),
+        validate=validate.OneOf(
+            choices=[val.value for val in PostProcessingContributionOrientation]
+        ),
         example="row",
     )
 
@@ -499,6 +510,71 @@ class ChartDataProphetOptionsSchema(ChartDataPostProcessingOperationOptionsSchem
         "An integer value will specify Fourier order of seasonality, `None` will "
         "automatically detect seasonality.",
         example=False,
+    )
+
+
+class ChartDataBoxplotOptionsSchema(ChartDataPostProcessingOperationOptionsSchema):
+    """
+    Boxplot operation config.
+    """
+
+    groupby = fields.List(
+        fields.String(description="Columns by which to group the query.",),
+        allow_none=True,
+    )
+
+    metrics = fields.List(
+        fields.Raw(),
+        description="Aggregate expressions. Metrics can be passed as both "
+        "references to datasource metrics (strings), or ad-hoc metrics"
+        "which are defined only within the query object. See "
+        "`ChartDataAdhocMetricSchema` for the structure of ad-hoc metrics.",
+    )
+
+    whisker_type = fields.String(
+        description="Whisker type. Any numpy function will work.",
+        validate=validate.OneOf(
+            choices=([val.value for val in PostProcessingBoxplotWhiskerType])
+        ),
+        required=True,
+        example="tukey",
+    )
+
+    percentiles = fields.Tuple(
+        (
+            fields.Float(
+                description="Lower percentile",
+                validate=[
+                    Range(
+                        min=0,
+                        max=100,
+                        min_inclusive=False,
+                        max_inclusive=False,
+                        error=_(
+                            "lower percentile must be greater than 0 and less "
+                            "than 100. Must be lower than upper percentile."
+                        ),
+                    ),
+                ],
+            ),
+            fields.Float(
+                description="Upper percentile",
+                validate=[
+                    Range(
+                        min=0,
+                        max=100,
+                        min_inclusive=False,
+                        max_inclusive=False,
+                        error=_(
+                            "upper percentile must be greater than 0 and less "
+                            "than 100. Must be higher than lower percentile."
+                        ),
+                    ),
+                ],
+            ),
+        ),
+        description="Upper and lower percentiles for percentile whisker type.",
+        example=[1, 99],
     )
 
 
@@ -607,6 +683,7 @@ class ChartDataPostProcessingOperationSchema(Schema):
         validate=validate.OneOf(
             choices=(
                 "aggregate",
+                "boxplot",
                 "contribution",
                 "cum",
                 "geodetic_parse",
@@ -707,9 +784,7 @@ class ChartDataExtrasSchema(Schema):
 class AnnotationLayerSchema(Schema):
     annotationType = fields.String(
         description="Type of annotation layer",
-        validate=validate.OneOf(
-            choices=("EVENT", "FORMULA", "INTERVAL", "TIME_SERIES",)
-        ),
+        validate=validate.OneOf(choices=[ann.value for ann in AnnotationType]),
     )
     color = fields.String(description="Layer color", allow_none=True,)
     descriptionColumns = fields.List(
@@ -782,6 +857,9 @@ class AnnotationLayerSchema(Schema):
 
 
 class ChartDataQueryObjectSchema(Schema):
+    class Meta:  # pylint: disable=too-few-public-methods
+        unknown = EXCLUDE
+
     annotation_layers = fields.List(
         fields.Nested(AnnotationLayerSchema),
         description="Annotation layers to apply to chart",
@@ -1015,6 +1093,12 @@ class ChartDataResponseResult(Schema):
         description="Amount of rows in result set", allow_none=False,
     )
     data = fields.List(fields.Dict(), description="A list with results")
+    applied_filters = fields.List(
+        fields.Dict(), description="A list with applied filters"
+    )
+    rejected_filters = fields.List(
+        fields.Dict(), description="A list with rejected filters"
+    )
 
 
 class ChartDataResponseSchema(Schema):
@@ -1024,15 +1108,52 @@ class ChartDataResponseSchema(Schema):
     )
 
 
+class ChartDataAsyncResponseSchema(Schema):
+    channel_id = fields.String(
+        description="Unique session async channel ID", allow_none=False,
+    )
+    job_id = fields.String(description="Unique async job ID", allow_none=False,)
+    user_id = fields.String(description="Requesting user ID", allow_none=True,)
+    status = fields.String(description="Status value for async job", allow_none=False,)
+    result_url = fields.String(
+        description="Unique result URL for fetching async query data", allow_none=False,
+    )
+
+
+class ChartFavStarResponseResult(Schema):
+    id = fields.Integer(description="The Chart id")
+    value = fields.Boolean(description="The FaveStar value")
+
+
+class GetFavStarIdsSchema(Schema):
+    result = fields.List(
+        fields.Nested(ChartFavStarResponseResult),
+        description="A list of results for each corresponding chart in the request",
+    )
+
+
+class ImportV1ChartSchema(Schema):
+    slice_name = fields.String(required=True)
+    viz_type = fields.String(required=True)
+    params = fields.Dict()
+    cache_timeout = fields.Integer(allow_none=True)
+    uuid = fields.UUID(required=True)
+    version = fields.String(required=True)
+    dataset_uuid = fields.UUID(required=True)
+
+
 CHART_SCHEMAS = (
     ChartDataQueryContextSchema,
     ChartDataResponseSchema,
+    ChartDataAsyncResponseSchema,
     # TODO: These should optimally be included in the QueryContext schema as an `anyOf`
     #  in ChartDataPostPricessingOperation.options, but since `anyOf` is not
     #  by Marshmallow<3, this is not currently possible.
     ChartDataAdhocMetricSchema,
     ChartDataAggregateOptionsSchema,
     ChartDataContributionOptionsSchema,
+    ChartDataProphetOptionsSchema,
+    ChartDataBoxplotOptionsSchema,
     ChartDataPivotOptionsSchema,
     ChartDataRollingOptionsSchema,
     ChartDataSelectOptionsSchema,
@@ -1042,4 +1163,5 @@ CHART_SCHEMAS = (
     ChartDataGeodeticParseOptionsSchema,
     ChartGetDatasourceResponseSchema,
     ChartCacheScreenshotResponseSchema,
+    GetFavStarIdsSchema,
 )

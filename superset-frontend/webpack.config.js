@@ -47,6 +47,7 @@ const {
   nameChunks = false,
 } = parsedArgs;
 const isDevMode = mode !== 'production';
+const isDevServer = process.argv[1].includes('webpack-dev-server');
 
 const output = {
   path: BUILD_DIR,
@@ -94,17 +95,9 @@ const plugins = [
         entrypoints: entryFiles,
       };
     },
-    // Also write to disk when using devServer
-    // instead of only keeping manifest.json in memory
-    // This is required to make devServer work with flask.
-    writeToFileEmit: isDevMode,
-  }),
-
-  // create fresh dist/ upon build
-  new CleanWebpackPlugin({
-    dry: false,
-    // required because the build directory is outside the frontend directory:
-    dangerouslyAllowCleanPatternsOutsideProject: true,
+    // Also write maniafest.json to disk when running `npm run dev`.
+    // This is required for Flask to work.
+    writeToFileEmit: isDevMode && !isDevServer,
   }),
 
   // expose mode variable to other modules
@@ -116,6 +109,7 @@ const plugins = [
   new ForkTsCheckerWebpackPlugin({
     eslint: true,
     checkSyntacticErrors: true,
+    memoryLimit: 4096,
   }),
 
   new CopyPlugin({
@@ -126,9 +120,21 @@ const plugins = [
     ],
   }),
 ];
+
 if (!process.env.CI) {
   plugins.push(new webpack.ProgressPlugin());
 }
+
+// clean up built assets if not from dev-server
+if (!isDevServer) {
+  plugins.push(
+    new CleanWebpackPlugin({
+      // required because the build directory is outside the frontend directory:
+      dangerouslyAllowCleanPatternsOutsideProject: true,
+    }),
+  );
+}
+
 if (!isDevMode) {
   // text loading (webpack 4+)
   plugins.push(
@@ -396,6 +402,9 @@ const config = {
       {
         test: /\.(ttf|eot|svg)(\?v=[0-9]\.[0-9]\.[0-9])?$/,
         loader: 'file-loader',
+        options: {
+          esModule: false,
+        },
       },
     ],
   },
