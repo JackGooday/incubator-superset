@@ -34,7 +34,7 @@ from typing import (
     TYPE_CHECKING,
     Union,
 )
-from urllib.error import URLError  # pylint: disable=ungrouped-imports
+from urllib.error import URLError
 
 import croniter
 import simplejson as json
@@ -72,7 +72,6 @@ from superset.utils.urls import get_url_path
 # pylint: disable=too-few-public-methods
 
 if TYPE_CHECKING:
-    # pylint: disable=unused-import
     from flask_appbuilder.security.sqla.models import User
     from werkzeug.datastructures import TypeConversionDict
 
@@ -386,7 +385,9 @@ def _get_slice_screenshot(slice_id: int, session: Session) -> ScreenshotData:
         "Superset.slice", user_friendly=True, slice_id=slice_obj.id,
     )
 
-    user = security_manager.find_user(current_app.config["THUMBNAIL_SELENIUM_USER"])
+    user = security_manager.get_user_by_username(
+        current_app.config["THUMBNAIL_SELENIUM_USER"], session=session
+    )
     image_data = screenshot.compute_and_cache(
         user=user, cache=thumbnail_cache, force=True,
     )
@@ -485,8 +486,8 @@ def deliver_slice(  # pylint: disable=too-many-arguments
     bind=True,
     soft_time_limit=config["EMAIL_ASYNC_TIME_LIMIT_SEC"],
 )
-def schedule_email_report(  # pylint: disable=unused-argument
-    task: Task,
+def schedule_email_report(
+    _task: Task,
     report_type: ScheduleType,
     schedule_id: int,
     recipients: Optional[str] = None,
@@ -535,14 +536,14 @@ def schedule_email_report(  # pylint: disable=unused-argument
     name="alerts.run_query",
     bind=True,
     soft_time_limit=config["EMAIL_ASYNC_TIME_LIMIT_SEC"],
-    # TODO: find cause of https://github.com/apache/incubator-superset/issues/10530
+    # TODO: find cause of https://github.com/apache/superset/issues/10530
     # and remove retry
     autoretry_for=(NoSuchColumnError, ResourceClosedError,),
     retry_kwargs={"max_retries": 5},
     retry_backoff=True,
 )
-def schedule_alert_query(  # pylint: disable=unused-argument
-    task: Task,
+def schedule_alert_query(
+    _task: Task,
     report_type: ScheduleType,
     schedule_id: int,
     recipients: Optional[str] = None,
@@ -592,15 +593,13 @@ def deliver_alert(
     recipients = recipients or alert.recipients
     slack_channel = slack_channel or alert.slack_channel
     validation_error_message = (
-        str(alert.observations[-1].value) + " " + alert.validators[0].pretty_config
-        if alert.validators
-        else ""
+        str(alert.observations[-1].value) + " " + alert.pretty_config
     )
 
     if alert.slice:
         alert_content = AlertContent(
             alert.label,
-            alert.sql_observer[0].sql,
+            alert.sql,
             str(alert.observations[-1].value),
             validation_error_message,
             _get_url_path("AlertModelView.show", user_friendly=True, pk=alert_id),
@@ -610,7 +609,7 @@ def deliver_alert(
         # TODO: dashboard delivery!
         alert_content = AlertContent(
             alert.label,
-            alert.sql_observer[0].sql,
+            alert.sql,
             str(alert.observations[-1].value),
             validation_error_message,
             _get_url_path("AlertModelView.show", user_friendly=True, pk=alert_id),
@@ -744,12 +743,8 @@ def validate_observations(alert_id: int, label: str, session: Session) -> bool:
 
     logger.info("Validating observations for alert <%s:%s>", alert_id, label)
     alert = session.query(Alert).get(alert_id)
-    if not alert.validators:
-        return False
-
-    validator = alert.validators[0]
-    validate = get_validator_function(validator.validator_type)
-    return bool(validate and validate(alert.sql_observer[0], validator.config))
+    validate = get_validator_function(alert.validator_type)
+    return bool(validate and validate(alert, alert.validator_config))
 
 
 def next_schedules(
@@ -809,8 +804,8 @@ def schedule_window(
         for eta in next_schedules(
             schedule.crontab, schedule_start_at, stop_at, resolution=resolution
         ):
+            logging.info("Scheduled eta %s", eta)
             get_scheduler_action(report_type).apply_async(args, eta=eta)  # type: ignore
-            break
 
     return None
 

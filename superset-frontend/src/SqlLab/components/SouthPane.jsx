@@ -19,10 +19,12 @@
 import React from 'react';
 import PropTypes from 'prop-types';
 import shortid from 'shortid';
-import { Alert, Tab, Tabs } from 'react-bootstrap';
+import { Alert } from 'react-bootstrap';
+import Tabs from 'src/common/components/Tabs';
 import { connect } from 'react-redux';
 import { bindActionCreators } from 'redux';
-import { t } from '@superset-ui/core';
+import { t, styled } from '@superset-ui/core';
+
 import { isFeatureEnabled, FeatureFlag } from 'src/featureFlags';
 
 import Label from 'src/components/Label';
@@ -35,7 +37,7 @@ import {
   LOCALSTORAGE_MAX_QUERY_AGE_MS,
 } from '../constants';
 
-const TAB_HEIGHT = 44;
+const TAB_HEIGHT = 64;
 
 /*
     editorQueries are queries executed by users passed from SqlEditor component
@@ -57,6 +59,29 @@ const defaultProps = {
   activeSouthPaneTab: 'Results',
   offline: false,
 };
+
+const StyledPane = styled.div`
+  width: 100%;
+
+  .ant-tabs .ant-tabs-content-holder {
+    overflow: visible;
+  }
+
+  .SouthPaneTabs {
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+  }
+  .tab-content {
+    .alert {
+      margin-top: ${({ theme }) => theme.gridUnit * 2}px;
+    }
+
+    button.fetch {
+      margin-top: ${({ theme }) => theme.gridUnit * 2}px;
+    }
+  }
+`;
 
 export class SouthPane extends React.PureComponent {
   constructor(props) {
@@ -140,9 +165,8 @@ export class SouthPane extends React.PureComponent {
       );
     }
     const dataPreviewTabs = props.dataPreviewQueries.map(query => (
-      <Tab
-        title={t('Preview: `%s`', decodeURIComponent(query.tableName))}
-        eventKey={query.id}
+      <Tabs.TabPane
+        tab={t('Preview: `%s`', decodeURIComponent(query.tableName))}
         key={query.id}
       >
         <ResultSet
@@ -154,32 +178,31 @@ export class SouthPane extends React.PureComponent {
           height={innerTabContentHeight}
           displayLimit={this.props.displayLimit}
         />
-      </Tab>
+      </Tabs.TabPane>
     ));
 
     return (
-      <div className="SouthPane" ref={this.southPaneRef}>
+      <StyledPane className="SouthPane" ref={this.southPaneRef}>
         <Tabs
-          bsStyle="tabs"
-          animation={false}
-          className="SouthPaneTabs"
-          id={shortid.generate()}
           activeKey={this.props.activeSouthPaneTab}
-          onSelect={this.switchTab}
+          className="SouthPaneTabs"
+          onChange={this.switchTab}
+          id={shortid.generate()}
+          fullWidth={false}
         >
-          <Tab title={t('Results')} eventKey="Results">
+          <Tabs.TabPane tab={t('Results')} key="Results">
             {results}
-          </Tab>
-          <Tab title={t('Query History')} eventKey="History">
+          </Tabs.TabPane>
+          <Tabs.TabPane tab={t('Query History')} key="History">
             <QueryHistory
               queries={props.editorQueries}
               actions={props.actions}
               displayLimit={props.displayLimit}
             />
-          </Tab>
+          </Tabs.TabPane>
           {dataPreviewTabs}
         </Tabs>
-      </div>
+      </StyledPane>
     );
   }
 }

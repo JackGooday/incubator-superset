@@ -20,14 +20,16 @@ import React from 'react';
 import configureStore from 'redux-mock-store';
 import thunk from 'redux-thunk';
 import { bindActionCreators } from 'redux';
+import { Provider } from 'react-redux';
 
 import { shallow } from 'enzyme';
 import { styledMount as mount } from 'spec/helpers/theming';
-import { FormControl, Modal, Radio } from 'react-bootstrap';
+import { FormControl, Radio } from 'react-bootstrap';
 import Button from 'src/components/Button';
 import sinon from 'sinon';
 import fetchMock from 'fetch-mock';
 
+import Modal from 'src/common/components/Modal';
 import * as exploreUtils from 'src/explore/exploreUtils';
 import * as saveModalActions from 'src/explore/actions/saveModalActions';
 import SaveModal from 'src/explore/components/SaveModal';
@@ -71,16 +73,18 @@ describe('SaveModal', () => {
   };
 
   const getWrapper = () =>
-    shallow(<SaveModal {...defaultProps} />, {
-      context: { store },
-    }).dive();
+    shallow(<SaveModal {...defaultProps} store={store} />)
+      .dive()
+      .dive();
 
   it('renders a Modal with the right set of components', () => {
     const wrapper = getWrapper();
     expect(wrapper.find(Modal)).toExist();
     expect(wrapper.find(FormControl)).toExist();
-    expect(wrapper.find(Button)).toHaveLength(3);
     expect(wrapper.find(Radio)).toHaveLength(2);
+
+    const footerWrapper = shallow(wrapper.find('Modal').props().footer);
+    expect(footerWrapper.find(Button)).toHaveLength(3);
   });
 
   it('overwrite radio button is disabled for new slice', () => {
@@ -114,15 +118,14 @@ describe('SaveModal', () => {
   });
 
   it('componentDidMount', () => {
-    sinon.spy(SaveModal.prototype, 'componentDidMount');
     sinon.spy(defaultProps.actions, 'fetchDashboards');
-    mount(<SaveModal {...defaultProps} />, {
-      context: { store },
-    });
-    expect(SaveModal.prototype.componentDidMount.calledOnce).toBe(true);
+    mount(
+      <Provider store={store}>
+        <SaveModal {...defaultProps} />
+      </Provider>,
+    );
     expect(defaultProps.actions.fetchDashboards.calledOnce).toBe(true);
 
-    SaveModal.prototype.componentDidMount.restore();
     defaultProps.actions.fetchDashboards.restore();
   });
 
@@ -142,10 +145,8 @@ describe('SaveModal', () => {
 
       sinon.stub(defaultProps.actions, 'saveSlice').callsFake(() =>
         Promise.resolve({
-          data: {
-            dashboard_url: 'http://localhost/mock_dashboard/',
-            slice: { slice_url: '/mock_slice/' },
-          },
+          dashboard_url: 'http://localhost/mock_dashboard/',
+          slice: { slice_url: '/mock_slice/' },
         }),
       );
     });
@@ -200,8 +201,8 @@ describe('SaveModal', () => {
         Object.defineProperty(window, 'location', windowLocation);
       });
 
-      it('Save & go to dashboard', () => {
-        return new Promise(done => {
+      it('Save & go to dashboard', () =>
+        new Promise(done => {
           wrapper.instance().saveOrOverwrite(true);
           defaultProps.actions.saveSlice().then(() => {
             expect(window.location.assign.callCount).toEqual(1);
@@ -210,11 +211,10 @@ describe('SaveModal', () => {
             );
             done();
           });
-        });
-      });
+        }));
 
-      it('saveas new slice', () => {
-        return new Promise(done => {
+      it('saveas new slice', () =>
+        new Promise(done => {
           wrapper.setState({
             action: 'saveas',
             newSliceName: 'new slice name',
@@ -227,11 +227,10 @@ describe('SaveModal', () => {
             );
             done();
           });
-        });
-      });
+        }));
 
-      it('overwrite original slice', () => {
-        return new Promise(done => {
+      it('overwrite original slice', () =>
+        new Promise(done => {
           wrapper.setState({ action: 'overwrite' });
           wrapper.instance().saveOrOverwrite(false);
           defaultProps.actions.saveSlice().then(() => {
@@ -241,8 +240,7 @@ describe('SaveModal', () => {
             );
             done();
           });
-        });
-      });
+        }));
     });
   });
 

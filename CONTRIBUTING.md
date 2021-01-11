@@ -47,7 +47,6 @@ little bit helps, and credit will always be given.
   - [Setup Local Environment for Development](#setup-local-environment-for-development)
     - [Documentation](#documentation)
       - [Images](#images)
-      - [API documentation](#api-documentation)
     - [Flask server](#flask-server)
       - [OS Dependencies](#os-dependencies)
       - [Logging to the browser console](#logging-to-the-browser-console)
@@ -70,6 +69,7 @@ little bit helps, and credit will always be given.
     - [Python Testing](#python-testing)
     - [Frontend Testing](#frontend-testing)
     - [Integration Testing](#integration-testing)
+    - [Storybook](#storybook)
   - [Translating](#translating)
     - [Enabling language selection](#enabling-language-selection)
     - [Extracting new strings for translation](#extracting-new-strings-for-translation)
@@ -77,6 +77,7 @@ little bit helps, and credit will always be given.
   - [Tips](#tips)
     - [Adding a new datasource](#adding-a-new-datasource)
     - [Improving visualizations](#improving-visualizations)
+    - [Visualization Plugins](#visualization-plugins)
     - [Adding a DB migration](#adding-a-db-migration)
     - [Merging DB migrations](#merging-db-migrations)
     - [SQL Lab Async](#sql-lab-async)
@@ -88,7 +89,6 @@ little bit helps, and credit will always be given.
     - [Y Axis 1](#y-axis-1)
     - [Y Axis 2](#y-axis-2)
     - [Query](#query)
-    - [Filters Configuration](#filters-configuration)
     - [Chart Options](#chart-options)
     - [Y Axis](#y-axis)
     - [Other](#other)
@@ -98,12 +98,12 @@ little bit helps, and credit will always be given.
 
 Here's a list of repositories that contain Superset-related packages:
 
-- [apache/incubator-superset](https://github.com/apache/incubator-superset)
+- [apache/superset](https://github.com/apache/superset)
   is the main repository containing the `apache-superset` Python package
   distributed on
   [pypi](https://pypi.org/project/apache-superset/). This repository
   also includes Superset's main TypeScript/JavaScript bundles and react apps under
-  the [superset-frontend](https://github.com/apache/incubator-superset/tree/master/superset-frontend)
+  the [superset-frontend](https://github.com/apache/superset/tree/master/superset-frontend)
   folder.
 - [apache-superset/superset-ui](https://github.com/apache-superset/superset-ui)
   contains core Superset's
@@ -142,7 +142,7 @@ The best way is to file an issue on GitHub:
 - Keep the scope as narrow as possible, to make it easier to implement.
 - Remember that this is a volunteer-driven project, and that contributions are welcome :)
 
-For large features or major changes to codebase, please create **Superset Improvement Proposal (SIP)**. See template from [SIP-0](https://github.com/apache/incubator-superset/issues/5602)
+For large features or major changes to codebase, please create **Superset Improvement Proposal (SIP)**. See template from [SIP-0](https://github.com/apache/superset/issues/5602)
 
 ### Fix Bugs
 
@@ -197,6 +197,23 @@ Finally, never submit a PR that will put master branch in broken state. If the P
 #### Authoring
 
 - Fill in all sections of the PR template.
+- Title the PR with one of the following semantic prefixes (inspired by [Karma](http://karma-runner.github.io/0.10/dev/git-commit-msg.html])):
+  - `feat` (new feature)
+  - `fix` (bug fix)
+  - `docs` (changes to the documentation)
+  - `style` (formatting, missing semi colons, etc; no application logic change)
+  - `refactor` (refactoring code)
+  - `test` (adding missing tests, refactoring tests; no application logic change)
+  - `chore` (updating tasks etc; no application logic change)
+  - `perf` (performance-related change)
+  - `build` (build tooling, Docker configuration change)
+  - `ci` (test runner, Github Actions workflow changes)
+  - `other` (changes that don't correspond to the above -- should be rare!)
+  - Examples:
+    - `feat: export charts as ZIP files`
+    - `perf(api): improve API info performance`
+    - `fix(chart-api): cached-indicator always shows value is cached`
+
 - Add prefix `[WIP]` to title if not ready for review (WIP = work-in-progress). We recommend creating a PR with `[WIP]` first and remove it once you have passed CI test and read through your code changes at least once.
 - **Screenshots/GIFs:** Changes to user interface require before/after screenshots, or GIF for interactions
   - Recommended capture tools ([Kap](https://getkap.co/), [LICEcap](https://www.cockos.com/licecap/), [Skitch](https://download.cnet.com/Skitch/3000-13455_4-189876.html))
@@ -293,8 +310,8 @@ Should you decide that reverting is desirable, it is the responsibility of the C
 First, [fork the repository on GitHub](https://help.github.com/articles/about-forks/), then clone it. You can clone the main repository directly, but you won't be able to send pull requests.
 
 ```bash
-git clone git@github.com:your-username/incubator-superset.git
-cd incubator-superset
+git clone git@github.com:your-username/superset.git
+cd superset
 ```
 
 ### Documentation
@@ -313,7 +330,7 @@ referenced in the rst, e.g.
 
 aren't actually stored in that directory. Instead, you should add and commit
 images (and any other static assets) to the `superset-frontend/images` directory.
-When the docs are deployed to https://superset.incubator.apache.org/, images
+When the docs are deployed to https://superset.apache.org/, images
 are copied from there to the `_static/images` directory, just like they're referenced
 in the docs.
 
@@ -323,7 +340,7 @@ For example, the image referenced above actually lives in `superset-frontend/ima
 
 #### OS Dependencies
 
-Make sure your machine meets the [OS dependencies](https://superset.incubator.apache.org/installation.html#os-dependencies) before following these steps.
+Make sure your machine meets the [OS dependencies](https://superset.apache.org/installation.html#os-dependencies) before following these steps.
 
 Ensure Python versions >3.7, Then proceed with:
 
@@ -393,12 +410,17 @@ Frontend assets (TypeScript, JavaScript, CSS, and images) must be compiled in or
 
 #### nvm and node
 
-First, be sure you are using recent versions of NodeJS and npm. Using [nvm](https://github.com/creationix/nvm) to manage them is recommended. Check the docs at the link to be sure, but at the time of writing the following would install nvm and node:
+First, be sure you are using recent versions of NodeJS and npm. We recommend using [nvm](https://github.com/nvm-sh/nvm) to manage your node environment:
 
 ```bash
-curl -o- https://raw.githubusercontent.com/creationix/nvm/v0.34.0/install.sh | bash
-nvm install node
+curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.37.0/install.sh | bash
+
+cd superset-frontend
+nvm install
+nvm use
 ```
+
+For those interested, you may also try out [avn](https://github.com/nvm-sh/nvm#deeper-shell-integration) to automatically switch to the node version that is required to run Superset frontend.
 
 #### Prerequisite
 
@@ -556,7 +578,7 @@ def sqrt(x: Union[float, int]) -> Union[float, int]:
 
 ### TypeScript
 
-TypeScript is fully supported and is the recommended language for writing all new frontend components. When modifying existing functions/components, migrating to TypeScript is appreciated, but not required. Examples of migrating functions/components to TypeScript can be found in [#9162](https://github.com/apache/incubator-superset/pull/9162) and [#9180](https://github.com/apache/incubator-superset/pull/9180).
+TypeScript is fully supported and is the recommended language for writing all new frontend components. When modifying existing functions/components, migrating to TypeScript is appreciated, but not required. Examples of migrating functions/components to TypeScript can be found in [#9162](https://github.com/apache/superset/pull/9162) and [#9180](https://github.com/apache/superset/pull/9180).
 
 ## Testing
 
@@ -585,7 +607,7 @@ tox -e <environment> -- tests/test_file.py
 or for a specific test via,
 
 ```bash
-tox -e <environment> -- tests/test_file.py:TestClassName.test_method_name
+tox -e <environment> -- tests/test_file.py::TestClassName::test_method_name
 ```
 
 Note that the test environment uses a temporary directory for defining the
@@ -601,17 +623,24 @@ cd superset-frontend
 npm run test
 ```
 
+To run a single test file:
+```bash
+npm run test -- path/to/file.js
+```
+
 ### Integration Testing
 
 We use [Cypress](https://www.cypress.io/) for integration tests. Tests can be run by `tox -e cypress`. To open Cypress and explore tests first setup and run test server:
 
 ```bash
 export SUPERSET_CONFIG=tests.superset_test_config
+export SUPERSET_TESTENV=true
+export ENABLE_REACT_CRUD_VIEWS=true
 export CYPRESS_BASE_URL="http://localhost:8081"
 superset db upgrade
-superset init
 superset load_test_users
-superset load_examples
+superset load_examples --load-test-data
+superset init
 superset run --port 8081
 ```
 
@@ -619,27 +648,51 @@ Run Cypress tests:
 
 ```bash
 cd superset-frontend
-npm run build
+npm run build-instrumented
 
 cd cypress-base
 npm install
-npm run cypress run
+
+# run tests via headless Chrome browser (requires Chrome 64+)
+npm run cypress-run-chrome
 
 # run tests from a specific file
-npm run cypress run -- --spec cypress/integration/explore/link.test.js
+npm run cypress-run-chrome -- --spec cypress/integration/explore/link.test.js
 
 # run specific file with video capture
-npm run cypress run -- --spec cypress/integration/dashboard/index.test.js --config video=true
+npm run cypress-run-chrome -- --spec cypress/integration/dashboard/index.test.js --config video=true
 
 # to open the cypress ui
-npm run cypress open
+npm run cypress-debug
 
 # to point cypress to a url other than the default (http://localhost:8088) set the environment variable before running the script
 # e.g., CYPRESS_BASE_URL="http://localhost:9000"
 CYPRESS_BASE_URL=<your url> npm run cypress open
 ```
 
-See [`superset-frontend/cypress_build.sh`](https://github.com/apache/incubator-superset/blob/master/superset-frontend/cypress_build.sh).
+See [`superset-frontend/cypress_build.sh`](https://github.com/apache/superset/blob/master/superset-frontend/cypress_build.sh).
+
+As an alternative you can use docker-compose environment for testing:
+
+Make sure you have added below line to your /etc/hosts file:
+```127.0.0.1 db```
+
+If you already have launched Docker environment please use the following command to assure a fresh database instance:
+```docker-compose down -v```
+
+Launch environment:
+
+```CYPRESS_CONFIG=true docker-compose up```
+
+It will serve backend and frontend on port 8088.
+
+Run Cypress tests:
+
+```bash
+cd cypress-base
+npm install
+npm run cypress open
+```
 
 ### Storybook
 
@@ -764,7 +817,7 @@ yarn build
 Then use `npm link` to create symlinks of the plugins/superset-ui packages you want to edit in `superset-frontend/node_modules`:
 
 ```bash
-cd incubator-superset/superset-frontend
+cd superset/superset-frontend
 npm link ../../superset-ui/plugins/[PLUGIN NAME]
 
 # Or to link all core superset-ui and plugin packages:
@@ -802,7 +855,7 @@ Submissions will be considered for submission (or removal) on a case-by-case bas
 
 1. Alter the model you want to change. This example will add a `Column` Annotations model.
 
-   [Example commit](https://github.com/apache/incubator-superset/commit/6c25f549384d7c2fc288451222e50493a7b14104)
+   [Example commit](https://github.com/apache/superset/commit/6c25f549384d7c2fc288451222e50493a7b14104)
 
 1. Generate the migration file
 
@@ -812,7 +865,7 @@ Submissions will be considered for submission (or removal) on a case-by-case bas
 
    This will generate a file in `migrations/version/{SHA}_this_will_be_in_the_migration_filename.py`.
 
-   [Example commit](https://github.com/apache/incubator-superset/commit/d3e83b0fd572c9d6c1297543d415a332858e262)
+   [Example commit](https://github.com/apache/superset/commit/d3e83b0fd572c9d6c1297543d415a332858e262)
 
 1. Upgrade the DB
 
@@ -832,7 +885,7 @@ Submissions will be considered for submission (or removal) on a case-by-case bas
 
    Since there is a new column, we need to add it to the AppBuilder Model view.
 
-   [Example commit](https://github.com/apache/incubator-superset/pull/5745/commits/6220966e2a0a0cf3e6d87925491f8920fe8a3458)
+   [Example commit](https://github.com/apache/superset/pull/5745/commits/6220966e2a0a0cf3e6d87925491f8920fe8a3458)
 
 1. Test the migration's `down` method
 

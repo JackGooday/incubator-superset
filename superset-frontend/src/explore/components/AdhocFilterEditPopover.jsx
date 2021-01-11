@@ -18,10 +18,11 @@
  */
 import React from 'react';
 import PropTypes from 'prop-types';
-import { Popover, Tab, Tabs } from 'react-bootstrap';
 import Button from 'src/components/Button';
-import { ThemeProvider } from '@superset-ui/core';
+import { styled, t } from '@superset-ui/core';
 
+import ErrorBoundary from 'src/components/ErrorBoundary';
+import Tabs from 'src/common/components/Tabs';
 import columnType from '../propTypes/columnType';
 import adhocMetricType from '../propTypes/adhocMetricType';
 import AdhocFilter, { EXPRESSION_TYPES } from '../AdhocFilter';
@@ -45,8 +46,12 @@ const propTypes = {
   theme: PropTypes.object,
 };
 
-const startingWidth = 300;
-const startingHeight = 190;
+const ResizeIcon = styled.i`
+  margin-left: ${({ theme }) => theme.gridUnit * 2}px;
+`;
+
+const startingWidth = 320;
+const startingHeight = 240;
 
 export default class AdhocFilterEditPopover extends React.Component {
   constructor(props) {
@@ -63,6 +68,8 @@ export default class AdhocFilterEditPopover extends React.Component {
       width: startingWidth,
       height: startingHeight,
     };
+
+    this.popoverContentRef = React.createRef();
   }
 
   componentDidMount() {
@@ -132,19 +139,26 @@ export default class AdhocFilterEditPopover extends React.Component {
     const hasUnsavedChanges = !adhocFilter.equals(propsAdhocFilter);
 
     return (
-      <Popover id="filter-edit-popover" {...popoverProps}>
-        <ThemeProvider theme={theme}>
-          <Tabs
-            id="adhoc-filter-edit-tabs"
-            defaultActiveKey={adhocFilter.expressionType}
-            className="adhoc-filter-edit-tabs"
-            style={{ height: this.state.height, width: this.state.width }}
+      <div
+        id="filter-edit-popover"
+        {...popoverProps}
+        data-test="filter-edit-popover"
+        ref={this.popoverContentRef}
+      >
+        <Tabs
+          id="adhoc-filter-edit-tabs"
+          defaultActiveKey={adhocFilter.expressionType}
+          className="adhoc-filter-edit-tabs"
+          data-test="adhoc-filter-edit-tabs"
+          style={{ minHeight: this.state.height, width: this.state.width }}
+          allowOverflow
+        >
+          <Tabs.TabPane
+            className="adhoc-filter-edit-tab"
+            key={EXPRESSION_TYPES.SIMPLE}
+            tab={t('Simple')}
           >
-            <Tab
-              className="adhoc-filter-edit-tab"
-              eventKey={EXPRESSION_TYPES.SIMPLE}
-              title="Simple"
-            >
+            <ErrorBoundary>
               <AdhocFilterEditPopoverSimpleTabContent
                 adhocFilter={this.state.adhocFilter}
                 onChange={this.onAdhocFilterChange}
@@ -152,13 +166,16 @@ export default class AdhocFilterEditPopover extends React.Component {
                 datasource={datasource}
                 onHeightChange={this.adjustHeight}
                 partitionColumn={partitionColumn}
+                popoverRef={this.popoverContentRef.current}
               />
-            </Tab>
-            <Tab
-              className="adhoc-filter-edit-tab"
-              eventKey={EXPRESSION_TYPES.SQL}
-              title="Custom SQL"
-            >
+            </ErrorBoundary>
+          </Tabs.TabPane>
+          <Tabs.TabPane
+            className="adhoc-filter-edit-tab"
+            key={EXPRESSION_TYPES.SQL}
+            tab={t('Custom SQL')}
+          >
+            <ErrorBoundary>
               {!this.props.datasource ||
               this.props.datasource.type !== 'druid' ? (
                 <AdhocFilterEditPopoverSqlTabContent
@@ -172,34 +189,35 @@ export default class AdhocFilterEditPopover extends React.Component {
                   Custom SQL Filters are not available on druid datasources
                 </div>
               )}
-            </Tab>
-          </Tabs>
-          <div>
-            <Button
-              disabled={!stateIsValid}
-              buttonStyle={
-                hasUnsavedChanges && stateIsValid ? 'primary' : 'default'
-              }
-              buttonSize="small"
-              className="m-r-5"
-              onClick={this.onSave}
-              cta
-            >
-              Save
-            </Button>
-            <Button buttonSize="small" onClick={this.props.onClose} cta>
-              Close
-            </Button>
-            <i
-              role="button"
-              aria-label="Resize"
-              tabIndex={0}
-              onMouseDown={this.onDragDown}
-              className="fa fa-expand edit-popover-resize text-muted"
-            />
-          </div>
-        </ThemeProvider>
-      </Popover>
+            </ErrorBoundary>
+          </Tabs.TabPane>
+        </Tabs>
+        <div>
+          <Button buttonSize="small" onClick={this.props.onClose} cta>
+            {t('Close')}
+          </Button>
+          <Button
+            data-test="adhoc-filter-edit-popover-save-button"
+            disabled={!stateIsValid}
+            buttonStyle={
+              hasUnsavedChanges && stateIsValid ? 'primary' : 'default'
+            }
+            buttonSize="small"
+            className="m-r-5"
+            onClick={this.onSave}
+            cta
+          >
+            {t('Save')}
+          </Button>
+          <ResizeIcon
+            role="button"
+            aria-label="Resize"
+            tabIndex={0}
+            onMouseDown={this.onDragDown}
+            className="fa fa-expand edit-popover-resize text-muted"
+          />
+        </div>
+      </div>
     );
   }
 }

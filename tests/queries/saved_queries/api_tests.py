@@ -17,22 +17,25 @@
 # isort:skip_file
 """Unit tests for Superset"""
 import json
+from io import BytesIO
 from typing import Optional
+from zipfile import is_zipfile
 
 import pytest
 import prison
-from sqlalchemy.sql import func, asc
+from sqlalchemy.sql import func, and_
 
 import tests.test_app
-from superset import db, security_manager
+from superset import db
 from superset.models.core import Database
+from superset.models.core import FavStar
 from superset.models.sql_lab import SavedQuery
 from superset.utils.core import get_example_database
 
 from tests.base_tests import SupersetTestCase
 
 
-SAVED_QUERIES_FIXTURE_COUNT = 5
+SAVED_QUERIES_FIXTURE_COUNT = 10
 
 
 class TestSavedQueryApi(SupersetTestCase):
@@ -78,6 +81,7 @@ class TestSavedQueryApi(SupersetTestCase):
     def create_saved_queries(self):
         with self.create_app().app_context():
             saved_queries = []
+            admin = self.get_user("admin")
             for cx in range(SAVED_QUERIES_FIXTURE_COUNT - 1):
                 saved_queries.append(
                     self.insert_default_saved_query(
@@ -92,11 +96,22 @@ class TestSavedQueryApi(SupersetTestCase):
                 )
             )
 
+            fav_saved_queries = []
+            for cx in range(round(SAVED_QUERIES_FIXTURE_COUNT / 2)):
+                fav_star = FavStar(
+                    user_id=admin.id, class_name="query", obj_id=saved_queries[cx].id
+                )
+                db.session.add(fav_star)
+                db.session.commit()
+                fav_saved_queries.append(fav_star)
+
             yield saved_queries
 
             # rollback changes
             for saved_query in saved_queries:
                 db.session.delete(saved_query)
+            for fav_saved_query in fav_saved_queries:
+                db.session.delete(fav_saved_query)
             db.session.commit()
 
     @pytest.mark.usefixtures("create_saved_queries")
@@ -116,10 +131,13 @@ class TestSavedQueryApi(SupersetTestCase):
         data = json.loads(rv.data.decode("utf-8"))
         assert data["count"] == len(saved_queries)
         expected_columns = [
+            "changed_on_delta_humanized",
+            "created_on",
             "created_by",
             "database",
             "db_id",
             "description",
+            "id",
             "label",
             "schema",
             "sql",
@@ -152,8 +170,10 @@ class TestSavedQueryApi(SupersetTestCase):
         """
         admin = self.get_user("admin")
         saved_queries = (
-            db.session.query(SavedQuery).filter(SavedQuery.created_by == admin).all()
-        )
+            db.session.query(SavedQuery)
+            .filter(SavedQuery.created_by == admin)
+            .order_by(SavedQuery.schema.asc())
+        ).all()
         self.login(username="admin")
         query_string = {"order_column": "schema", "order_direction": "asc"}
         uri = f"api/v1/saved_query/?q={prison.dumps(query_string)}"
@@ -197,6 +217,56 @@ class TestSavedQueryApi(SupersetTestCase):
         assert rv.status_code == 200
         data = json.loads(rv.data.decode("utf-8"))
         assert data["count"] == len(all_queries)
+
+    @pytest.mark.usefixtures("create_saved_queries")
+    def test_get_list_filter_database_saved_query(self):
+        """
+        Saved Query API: Test get list and database saved query
+        """
+        example_db = get_example_database()
+        admin_user = self.get_user("admin")
+
+        all_db_queries = (
+            db.session.query(SavedQuery)
+            .filter(SavedQuery.db_id == example_db.id)
+            .filter(SavedQuery.created_by_fk == admin_user.id)
+            .all()
+        )
+
+        self.login(username="admin")
+        query_string = {
+            "filters": [{"col": "database", "opr": "rel_o_m", "value": example_db.id}],
+        }
+        uri = f"api/v1/saved_query/?q={prison.dumps(query_string)}"
+        rv = self.get_assert_metric(uri, "get_list")
+        assert rv.status_code == 200
+        data = json.loads(rv.data.decode("utf-8"))
+        assert data["count"] == len(all_db_queries)
+
+    @pytest.mark.usefixtures("create_saved_queries")
+    def test_get_list_filter_schema_saved_query(self):
+        """
+        Saved Query API: Test get list and schema saved query
+        """
+        schema_name = "schema1"
+        admin_user = self.get_user("admin")
+
+        all_db_queries = (
+            db.session.query(SavedQuery)
+            .filter(SavedQuery.schema == schema_name)
+            .filter(SavedQuery.created_by_fk == admin_user.id)
+            .all()
+        )
+
+        self.login(username="admin")
+        query_string = {
+            "filters": [{"col": "schema", "opr": "eq", "value": schema_name}],
+        }
+        uri = f"api/v1/saved_query/?q={prison.dumps(query_string)}"
+        rv = self.get_assert_metric(uri, "get_list")
+        assert rv.status_code == 200
+        data = json.loads(rv.data.decode("utf-8"))
+        assert data["count"] == len(all_db_queries)
 
     @pytest.mark.usefixtures("create_saved_queries")
     def test_get_list_custom_filter_schema_saved_query(self):
@@ -287,14 +357,80 @@ class TestSavedQueryApi(SupersetTestCase):
         data = json.loads(rv.data.decode("utf-8"))
         assert data["count"] == len(all_queries)
 
+    @pytest.mark.usefixtures("create_saved_queries")
+    def test_get_saved_query_favorite_filter(self):
+        """
+        SavedQuery API: Test get saved queries favorite filter
+        """
+        admin = self.get_user("admin")
+        users_favorite_query = db.session.query(FavStar.obj_id).filter(
+            and_(FavStar.user_id == admin.id, FavStar.class_name == "query")
+        )
+        expected_models = (
+            db.session.query(SavedQuery)
+            .filter(and_(SavedQuery.id.in_(users_favorite_query)))
+            .order_by(SavedQuery.label.asc())
+            .all()
+        )
+
+        arguments = {
+            "filters": [{"col": "id", "opr": "saved_query_is_fav", "value": True}],
+            "order_column": "label",
+            "order_direction": "asc",
+            "keys": ["none"],
+            "columns": ["label"],
+        }
+        self.login(username="admin")
+        uri = f"api/v1/saved_query/?q={prison.dumps(arguments)}"
+        rv = self.client.get(uri)
+        data = json.loads(rv.data.decode("utf-8"))
+        assert rv.status_code == 200
+        assert len(expected_models) == data["count"]
+
+        for i, expected_model in enumerate(expected_models):
+            assert expected_model.label == data["result"][i]["label"]
+
+        # Test not favorite saves queries
+        expected_models = (
+            db.session.query(SavedQuery)
+            .filter(
+                and_(
+                    ~SavedQuery.id.in_(users_favorite_query),
+                    SavedQuery.created_by == admin,
+                )
+            )
+            .order_by(SavedQuery.label.asc())
+            .all()
+        )
+        arguments["filters"][0]["value"] = False
+        uri = f"api/v1/saved_query/?q={prison.dumps(arguments)}"
+        rv = self.client.get(uri)
+        data = json.loads(rv.data.decode("utf-8"))
+        assert rv.status_code == 200
+        assert len(expected_models) == data["count"]
+
     def test_info_saved_query(self):
         """
         SavedQuery API: Test info
         """
         self.login(username="admin")
-        uri = f"api/v1/saved_query/_info"
+        uri = "api/v1/saved_query/_info"
         rv = self.get_assert_metric(uri, "info")
         assert rv.status_code == 200
+
+    def test_info_security_saved_query(self):
+        """
+        SavedQuery API: Test info security
+        """
+        self.login(username="admin")
+        params = {"keys": ["permissions"]}
+        uri = f"api/v1/saved_query/_info?q={prison.dumps(params)}"
+        rv = self.get_assert_metric(uri, "info")
+        data = json.loads(rv.data.decode("utf-8"))
+        assert rv.status_code == 200
+        assert "can_read" in data["permissions"]
+        assert "can_write" in data["permissions"]
+        assert len(data["permissions"]) == 2
 
     def test_related_saved_query(self):
         """
@@ -398,6 +534,8 @@ class TestSavedQueryApi(SupersetTestCase):
         uri = f"api/v1/saved_query/{max_id + 1}"
         rv = self.client.get(uri)
         assert rv.status_code == 404
+        db.session.delete(query)
+        db.session.commit()
 
     def test_create_saved_query(self):
         """
@@ -559,4 +697,51 @@ class TestSavedQueryApi(SupersetTestCase):
         self.login(username="admin")
         uri = f"api/v1/saved_query/?q={prison.dumps(saved_query_ids)}"
         rv = self.delete_assert_metric(uri, "bulk_delete")
+        assert rv.status_code == 404
+
+    @pytest.mark.usefixtures("create_saved_queries")
+    def test_export(self):
+        """
+        Saved Query API: Test export
+        """
+        admin = self.get_user("admin")
+        sample_query = (
+            db.session.query(SavedQuery).filter(SavedQuery.created_by == admin).first()
+        )
+
+        self.login(username="admin")
+        argument = [sample_query.id]
+        uri = f"api/v1/saved_query/export/?q={prison.dumps(argument)}"
+        rv = self.client.get(uri)
+        assert rv.status_code == 200
+        buf = BytesIO(rv.data)
+        assert is_zipfile(buf)
+
+    @pytest.mark.usefixtures("create_saved_queries")
+    def test_export_not_found(self):
+        """
+        Saved Query API: Test export
+        """
+        max_id = db.session.query(func.max(SavedQuery.id)).scalar()
+
+        self.login(username="admin")
+        argument = [max_id + 1, max_id + 2]
+        uri = f"api/v1/saved_query/export/?q={prison.dumps(argument)}"
+        rv = self.client.get(uri)
+        assert rv.status_code == 404
+
+    @pytest.mark.usefixtures("create_saved_queries")
+    def test_export_not_allowed(self):
+        """
+        Saved Query API: Test export
+        """
+        admin = self.get_user("admin")
+        sample_query = (
+            db.session.query(SavedQuery).filter(SavedQuery.created_by == admin).first()
+        )
+
+        self.login(username="gamma")
+        argument = [sample_query.id]
+        uri = f"api/v1/saved_query/export/?q={prison.dumps(argument)}"
+        rv = self.client.get(uri)
         assert rv.status_code == 404

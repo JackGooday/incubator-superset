@@ -40,6 +40,7 @@ import {
 } from 'react-sortable-hoc';
 import arrayMove from 'array-move';
 import { Props as SelectProps } from 'react-select/src/Select';
+import { useTheme } from '@superset-ui/core';
 import {
   WindowedSelectComponentType,
   WindowedSelectProps,
@@ -52,11 +53,13 @@ import {
   DEFAULT_CLASS_NAME,
   DEFAULT_CLASS_NAME_PREFIX,
   DEFAULT_STYLES,
-  DEFAULT_THEME,
   DEFAULT_COMPONENTS,
   VALUE_LABELED_STYLES,
   PartialThemeConfig,
   PartialStylesConfig,
+  SelectComponentsType,
+  InputProps,
+  defaultTheme,
 } from './styles';
 import { findValue } from './utils';
 
@@ -96,9 +99,9 @@ function styled<
   OptionType extends OptionTypeBase,
   SelectComponentType extends
     | WindowedSelectComponentType<OptionType>
-    | ComponentType<SelectProps<OptionType>> = WindowedSelectComponentType<
-    OptionType
-  >
+    | ComponentType<
+        SelectProps<OptionType>
+      > = WindowedSelectComponentType<OptionType>
 >(SelectComponent: SelectComponentType) {
   type SelectProps = SupersetStyledSelectProps<OptionType>;
   type Components = SelectComponents<OptionType>;
@@ -110,8 +113,8 @@ function styled<
   // default components for the given OptionType
   const supersetDefaultComponents: SelectComponentsConfig<OptionType> = DEFAULT_COMPONENTS;
 
-  const getSortableMultiValue = (MultiValue: Components['MultiValue']) => {
-    return SortableElement((props: MultiValueProps<OptionType>) => {
+  const getSortableMultiValue = (MultiValue: Components['MultiValue']) =>
+    SortableElement((props: MultiValueProps<OptionType>) => {
       const onMouseDown = (e: SyntheticEvent) => {
         e.preventDefault();
         e.stopPropagation();
@@ -119,7 +122,6 @@ function styled<
       const innerProps = { onMouseDown };
       return <MultiValue {...props} innerProps={innerProps} />;
     });
-  };
 
   /**
    * Superset styled `Select` component. Apply Superset themed stylesheets and
@@ -174,7 +176,6 @@ function styled<
         }
         return optionRenderer ? optionRenderer(option) : getOptionLabel(option);
       },
-
       ...restProps
     } = selectProps;
 
@@ -214,6 +215,8 @@ function styled<
       Object.assign(restProps, sortableContainerProps);
     }
 
+    stylesConfig.menuPortal = base => ({ ...base, zIndex: 9999 });
+
     // When values are rendered as labels, adjust valueContainer padding
     const valueRenderedAsLabel =
       valueRenderedAsLabel_ === undefined ? isMulti : valueRenderedAsLabel_;
@@ -223,11 +226,11 @@ function styled<
 
     // Handle onPaste event
     if (onPaste) {
-      const Input = components.Input || defaultComponents.Input;
-      components.Input = props => (
-        <div onPaste={onPaste}>
-          <Input {...props} />
-        </div>
+      const Input =
+        (components.Input as SelectComponentsType['Input']) ||
+        (defaultComponents.Input as SelectComponentsType['Input']);
+      components.Input = (props: InputProps) => (
+        <Input {...props} onPaste={onPaste} />
       );
     }
     // for CreaTable
@@ -255,6 +258,8 @@ function styled<
       }
     };
 
+    const theme = useTheme();
+
     return (
       <MaybeSortableSelect
         ref={setRef}
@@ -275,7 +280,9 @@ function styled<
         styles={{ ...DEFAULT_STYLES, ...stylesConfig } as SelectProps['styles']}
         // merge default theme from `react-select`, default theme for Superset,
         // and the theme from props.
-        theme={defaultTheme => merge(defaultTheme, DEFAULT_THEME, themeConfig)}
+        theme={reactSelectTheme =>
+          merge(reactSelectTheme, defaultTheme(theme), themeConfig)
+        }
         formatOptionLabel={formatOptionLabel}
         getOptionLabel={getOptionLabel}
         getOptionValue={getOptionValue}
@@ -293,5 +300,9 @@ export const Select = styled(WindowedSelect);
 export const AsyncSelect = styled(WindowedAsyncSelect);
 export const CreatableSelect = styled(WindowedCreatableSelect);
 export const AsyncCreatableSelect = styled(WindowedAsyncCreatableSelect);
-export const PaginatedSelect = withAsyncPaginate(styled(BasicSelect));
+export const PaginatedSelect = withAsyncPaginate(
+  styled<OptionTypeBase, ComponentType<SelectProps<OptionTypeBase>>>(
+    BasicSelect,
+  ),
+);
 export default Select;
