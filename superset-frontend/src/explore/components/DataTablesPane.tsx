@@ -24,7 +24,6 @@ import Loading from 'src/components/Loading';
 import TableView, { EmptyWrapperType } from 'src/components/TableView';
 import { getChartDataRequest } from 'src/chart/chartAction';
 import { getClientErrorObject } from 'src/utils/getClientErrorObject';
-import { getDataTablePageSize } from 'src/explore/exploreUtils';
 import {
   CopyToClipboardButton,
   FilterInput,
@@ -43,6 +42,8 @@ const NULLISH_RESULTS_STATE = {
   [RESULT_TYPES.samples]: undefined,
 };
 
+const DATA_TABLE_PAGE_SIZE = 50;
+
 const TableControlsWrapper = styled.div`
   display: flex;
   align-items: center;
@@ -54,13 +55,8 @@ const TableControlsWrapper = styled.div`
 
 const SouthPane = styled.div`
   position: relative;
-`;
-
-const SouthPaneBackground = styled.div`
-  position: absolute;
-  height: 100%;
-  width: 100%;
-  background: ${({ theme }) => theme.colors.grayscale.light5};
+  background-color: ${({ theme }) => theme.colors.grayscale.light5};
+  z-index: 5;
 `;
 
 const TabsWrapper = styled.div<{ contentHeight: number }>`
@@ -77,12 +73,10 @@ export const DataTablesPane = ({
   queryFormData,
   tableSectionHeight,
   onCollapseChange,
-  displayBackground,
 }: {
   queryFormData: Record<string, any>;
   tableSectionHeight: number;
   onCollapseChange: (openPanelName: string) => void;
-  displayBackground: boolean;
 }) => {
   const [data, setData] = useState<{
     [RESULT_TYPES.results]?: Record<string, any>[];
@@ -149,7 +143,7 @@ export const DataTablesPane = ({
       ...prevState,
       [RESULT_TYPES.samples]: true,
     }));
-  }, [queryFormData.adhoc_filters]);
+  }, [queryFormData.adhoc_filters, queryFormData.datasource]);
 
   useEffect(() => {
     if (panelOpen && isRequestPending[RESULT_TYPES.results]) {
@@ -189,9 +183,6 @@ export const DataTablesPane = ({
   };
 
   const renderDataTable = (type: string) => {
-    // restrict cell count to 10000 or min 5 rows to avoid crashing browser
-    const columnsLength = columns[type].length;
-    const pageSize = getDataTablePageSize(columnsLength);
     if (isLoading[type]) {
       return <Loading />;
     }
@@ -206,11 +197,12 @@ export const DataTablesPane = ({
         <TableView
           columns={columns[type]}
           data={filteredData[type]}
-          withPagination
-          pageSize={pageSize}
+          pageSize={DATA_TABLE_PAGE_SIZE}
           noDataText={t('No data')}
           emptyWrapperType={EmptyWrapperType.Small}
           className="table-condensed"
+          isPaginationSticky
+          showRowCount={false}
         />
       );
     }
@@ -219,7 +211,7 @@ export const DataTablesPane = ({
 
   const TableControls = (
     <TableControlsWrapper>
-      <RowCount data={data[activeTabKey]} />
+      <RowCount data={data[activeTabKey]} loading={isLoading[activeTabKey]} />
       <CopyToClipboardButton data={data[activeTabKey]} />
       <FilterInput onChangeHandler={setFilterText} />
     </TableControlsWrapper>
@@ -232,7 +224,6 @@ export const DataTablesPane = ({
 
   return (
     <SouthPane>
-      {displayBackground && <SouthPaneBackground />}
       <TabsWrapper contentHeight={tableSectionHeight}>
         <Collapse
           accordion

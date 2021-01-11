@@ -27,6 +27,7 @@ import {
 } from '@superset-ui/core';
 import { availableDomains } from 'src/utils/hostNamesConfig';
 import { safeStringify } from 'src/utils/safeStringify';
+import { MULTI_OPERATORS } from './constants';
 
 const MAX_URL_LENGTH = 8000;
 
@@ -250,14 +251,6 @@ export function postForm(url, payload, target = '_blank') {
   document.body.removeChild(hiddenForm);
 }
 
-export function getDataTablePageSize(columnsLength) {
-  let pageSize;
-  if (columnsLength) {
-    pageSize = Math.ceil(Math.max(5, 10000 / columnsLength));
-  }
-  return pageSize || 50;
-}
-
 export const exportChart = ({
   formData,
   resultFormat = 'json',
@@ -295,8 +288,9 @@ export const exploreChart = formData => {
   postForm(url, formData);
 };
 
-export const useDebouncedEffect = (effect, delay) => {
-  const callback = useCallback(effect, [effect]);
+export const useDebouncedEffect = (effect, delay, deps) => {
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const callback = useCallback(effect, deps);
 
   useEffect(() => {
     const handler = setTimeout(() => {
@@ -307,4 +301,33 @@ export const useDebouncedEffect = (effect, delay) => {
       clearTimeout(handler);
     };
   }, [callback, delay]);
+};
+
+export const getSimpleSQLExpression = (subject, operator, comparator) => {
+  const isMulti = MULTI_OPERATORS.has(operator);
+  let expression = subject ?? '';
+  if (subject && operator) {
+    expression += ` ${operator}`;
+    const firstValue =
+      isMulti && Array.isArray(comparator) ? comparator[0] : comparator;
+    let comparatorArray;
+    if (comparator === undefined || comparator === null) {
+      comparatorArray = [];
+    } else if (Array.isArray(comparator)) {
+      comparatorArray = comparator;
+    } else {
+      comparatorArray = [comparator];
+    }
+    const isString =
+      firstValue !== undefined && Number.isNaN(Number(firstValue));
+    const quote = isString ? "'" : '';
+    const [prefix, suffix] = isMulti ? ['(', ')'] : ['', ''];
+    const formattedComparators = comparatorArray.map(
+      val => `${quote}${isString ? val.replace("'", "''") : val}${quote}`,
+    );
+    if (comparatorArray.length > 0) {
+      expression += ` ${prefix}${formattedComparators.join(', ')}${suffix}`;
+    }
+  }
+  return expression;
 };

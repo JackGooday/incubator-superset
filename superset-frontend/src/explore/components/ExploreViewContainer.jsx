@@ -81,8 +81,10 @@ const Styles = styled.div`
   border-top: 1px solid ${({ theme }) => theme.colors.grayscale.light2};
   .explore-column {
     display: flex;
+    flex: 0 0 ${({ theme }) => theme.gridUnit * 80}px;
     flex-direction: column;
     padding: ${({ theme }) => 2 * theme.gridUnit}px 0;
+    max-width: ${({ theme }) => theme.gridUnit * 80}px;
     max-height: 100%;
   }
   .data-source-selection {
@@ -91,6 +93,8 @@ const Styles = styled.div`
     border-right: 1px solid ${({ theme }) => theme.colors.grayscale.light2};
   }
   .main-explore-content {
+    flex: 1;
+    min-width: ${({ theme }) => theme.gridUnit * 128}px;
     border-left: 1px solid ${({ theme }) => theme.colors.grayscale.light2};
   }
   .controls-column {
@@ -121,9 +125,6 @@ const Styles = styled.div`
     background-color: ${({ theme }) => theme.colors.grayscale.light4};
     padding: ${({ theme }) => 2 * theme.gridUnit}px;
     width: ${({ theme }) => 8 * theme.gridUnit}px;
-  }
-  .data-tab {
-    min-width: 288px;
   }
   .callpase-icon > svg {
     color: ${({ theme }) => theme.colors.primary.base};
@@ -168,7 +169,11 @@ function ExploreViewContainer(props) {
 
   function addHistory({ isReplace = false, title } = {}) {
     const payload = { ...props.form_data };
-    const longUrl = getExploreLongUrl(props.form_data, null, false);
+    const longUrl = getExploreLongUrl(
+      props.form_data,
+      props.standalone ? 'standalone' : null,
+      false,
+    );
     try {
       if (isReplace) {
         window.history.replaceState(payload, title, longUrl);
@@ -266,7 +271,6 @@ function ExploreViewContainer(props) {
     }
   }, [isDynamicPluginLoading]);
 
-  // effect to run when controls change
   useEffect(() => {
     const hasError = Object.values(props.controls).some(
       control =>
@@ -275,7 +279,10 @@ function ExploreViewContainer(props) {
     if (!hasError) {
       props.actions.triggerQuery(true, props.chart.id);
     }
+  }, []);
 
+  // effect to run when controls change
+  useEffect(() => {
     if (previousControls) {
       if (props.controls.viz_type.value !== previousControls.viz_type.value) {
         props.actions.resetControls();
@@ -399,9 +406,7 @@ function ExploreViewContainer(props) {
       )}
       <div
         className={
-          isCollapsed
-            ? 'no-show'
-            : 'data-tab explore-column data-source-selection'
+          isCollapsed ? 'no-show' : 'explore-column data-source-selection'
         }
       >
         <div className="title-container">
