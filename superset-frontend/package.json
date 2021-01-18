@@ -81,7 +81,7 @@
     "@superset-ui/legacy-plugin-chart-partition": "^0.16.6",
     "@superset-ui/legacy-plugin-chart-pivot-table": "^0.16.6",
     "@superset-ui/legacy-plugin-chart-rose": "^0.16.6",
-    "@superset-ui/legacy-plugin-chart-sankey": "^0.16.4",
+    "@superset-ui/legacy-plugin-chart-sankey": "^0.16.7",
     "@superset-ui/legacy-plugin-chart-sankey-loop": "^0.16.4",
     "@superset-ui/legacy-plugin-chart-sunburst": "^0.16.4",
     "@superset-ui/legacy-plugin-chart-treemap": "^0.16.4",
